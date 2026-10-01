@@ -23,6 +23,7 @@ import {
   IconChevronRightOutline14,
   IconChevronUpOutline14,
   IconCheckOutline16,
+  IconCodeOutline16,
   IconCopyOutline16,
   IconCordisPluginOutline14,
   IconDownloadOutline16,
@@ -1166,6 +1167,23 @@ function DownloadCount({ plugin, t }: { plugin: RegistryPlugin; t: Translate }) 
   )
 }
 
+/** Monochrome mark for one fact in front of the capability fold. Ink, not a warning colour. */
+function AheadMark({ fact }: { fact: string }) {
+  const props = { size: 16, className: css.capAheadIcon }
+  if (fact === 'dynamic-code') return <IconCodeOutline16 {...props} />
+  if (fact === 'host-runtime') return <IconCordisPluginOutline14 {...props} />
+  if (fact.startsWith('reads credentials')) {
+    return (
+      <svg className={css.capAheadIcon} viewBox="0 0 16 16" width={16} height={16} aria-hidden="true" focusable="false">
+        <circle cx="5.5" cy="8" r="2.25" fill="none" stroke="currentColor" strokeWidth="1.25" />
+        <path d="M7.6 8H13M10.6 8v2M12.4 8v1.4" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (fact.startsWith('uses plaintext http://') || fact.startsWith('uses literal IP ')) return <IconLinkOutline14 {...props} />
+  return <IconQuestionOutline14 {...props} />
+}
+
 /** Circle with a question mark, in the same dark badge and light glyph as the
  * terminal mark below it. */
 function ConfirmCapabilityIcon() {
@@ -1318,6 +1336,39 @@ function ConfirmWarnIcon() {
       <circle cx="8" cy="11.15" r="0.68" fill="#fff" />
     </svg>
   )
+}
+
+/**
+ * Whether a red line is one a reader has to weigh BEFORE installing, rather
+ * than a fact about what the plugin does once it runs.
+ *
+ * Two families qualify, for one reason: they happen at install time. There is
+ * no "afterwards" to inspect, so this is the last moment the decision can be
+ * made. The other families — credentials+network above all, 73% of every red
+ * line the catalog holds — describe what plugins normally do, and calling
+ * that urgent is how a warning gets trained away.
+ */
+function redLineIsUrgent(line: string): boolean {
+  return line.startsWith('runs code at install time') || line.startsWith('tampers with a core bundle')
+}
+
+/**
+ * How many facts to show before "N more".
+ *
+ * A credentials red line, dynamic code, and a host-runtime dependency are the
+ * three that reach past the plugin's own source: a secret, code that was not
+ * in the package, or DSH itself. On 3844 scanned records about a quarter of
+ * plugins have one of those, and most of those have exactly one — three lines
+ * covers that, and a longer list goes back to being something nobody reads.
+ */
+const AHEAD_LIMIT = 3
+
+/** Quiet red lines, then dynamic-code, then host-runtime. Catalog order within each. */
+function aheadFacts(plugin: { capabilityRedLines?: string[]; capabilities?: string[] }): string[] {
+  const quiet = (plugin.capabilityRedLines ?? []).filter(line => !redLineIsUrgent(line))
+  const caps = plugin.capabilities ?? []
+  const named = (['dynamic-code', 'host-runtime'] as const).filter(name => caps.includes(name))
+  return [...quiet, ...named]
 }
 
 /** Install-dialog fold (#739). A gray block, not an outlined frame: the icon
@@ -2160,11 +2211,15 @@ export function MarketSection(props: MarketSectionProps) {
   /** Install-command disclosure inside the confirm dialog. */
   const [cmdOpen, setCmdOpen] = useState(false)
   const [capsOpen, setCapsOpen] = useState(false)
-  // Both folds belong to one dialog opening; the next plugin starts collapsed
-  // no matter which path closed the previous one (cancel, Esc, install).
+  /** Facts past the first three in "After you install, it can". */
+  const [aheadMoreOpen, setAheadMoreOpen] = useState(false)
+  // The capability list and the install command start closed for each plugin.
+  // The lines in front of them are already visible; opening the list is a
+  // separate question.
   useEffect(() => {
     setCapsOpen(false)
     setCmdOpen(false)
+    setAheadMoreOpen(false)
   }, [confirming])
   /** Per-row "why is it not live" disclosure (installed tab). */
   const [whyOpen, setWhyOpen] = useState<string | null>(null)
@@ -4725,19 +4780,6 @@ export function MarketSection(props: MarketSectionProps) {
   }
 
   /**
-   * Whether a red line is one a reader has to weigh BEFORE installing, rather
-   * than a fact about what the plugin does once it runs.
-   *
-   * Two families qualify, for one reason: they happen at install time. There is
-   * no "afterwards" to inspect, so this is the last moment the decision can be
-   * made. The other families — credentials+network above all, 73% of every red
-   * line the catalog holds — describe what plugins normally do, and calling
-   * that urgent is how a warning gets trained away.
-   */
-  const redLineIsUrgent = (line: string): boolean =>
-    line.startsWith('runs code at install time') || line.startsWith('tampers with a core bundle')
-
-  /**
    * What the static scan found (#401), in the detail dialog and nowhere else.
    *
    * It used to sit on both cards. It does not any more, for three reasons that
@@ -4748,12 +4790,26 @@ export function MarketSection(props: MarketSectionProps) {
    * dialog leads with the one thing that needs a decision before you press
    * install, and the rest of the facts are one click away.
    *
-   * Which lines count as that one thing is `redLineIsUrgent`, not a guess made
-   * here: a rare rule that fires at install time, never a description of what
-   * plugins normally do.
+   * Which lines count as that one thing is `redLineIsUrgent`: a rare rule that
+   * fires at install time, drawn above everything else. Quiet red lines,
+   * dynamic code, and a host-runtime dependency sit in front of the fold as
+   * plain sentences — they reach past the plugin's own source. The fold stays
+   * closed and holds every capability, so a dialog without those sentences is
+   * not a claim that the scan was clean. The fold does not score, band, or
+   * colour a plugin safe.
    */
   const capabilityDetail = (p: RegistryPlugin) => {
     const redLines = p.capabilityRedLines ?? []
+    const ahead = aheadFacts(p)
+    const shown = aheadMoreOpen ? ahead : ahead.slice(0, AHEAD_LIMIT)
+    const hidden = ahead.length - shown.length
+    const chip = (name: string) => (HostTag !== null
+      ? <HostTag key={name} tone="outline" className={css.capChip}>{capabilityLabel(name)}</HostTag>
+      : <span key={name} className={css.capChip}>{capabilityLabel(name)}</span>
+    )
+    const aheadText = (fact: string) => fact === 'dynamic-code' || fact === 'host-runtime'
+      ? capabilityLabel(fact)
+      : redLineLabel(fact)
     return (
       <>
         {redLines.filter(redLineIsUrgent).map(line => (
@@ -4762,6 +4818,22 @@ export function MarketSection(props: MarketSectionProps) {
             {' ' + redLineLabel(line)}
           </p>
         ))}
+        {ahead.length > 0 && (
+          <div className={css.capAhead}>
+            <p className={css.capAheadLabel}>{t('capabilityAhead')}</p>
+            {shown.map(fact => (
+              <p key={fact} className={css.capAheadRow}>
+                <AheadMark fact={fact} />
+                <span>{aheadText(fact)}</span>
+              </p>
+            ))}
+            {hidden > 0 && (
+              <button type="button" className={css.capAheadMore} onClick={() => setAheadMoreOpen(true)}>
+                {t('capabilityAheadMore').replace('{0}', String(hidden))}
+              </button>
+            )}
+          </div>
+        )}
         <ConfirmFold
           icon={<ConfirmCapabilityIcon />}
           title={t('capabilityTitle')}
@@ -4773,13 +4845,7 @@ export function MarketSection(props: MarketSectionProps) {
               ? <span className={css.capMuted} data-state="unchecked">{t('capabilityUnchecked')}</span>
               : p.capabilities.length === 0
                 ? <span className={css.capMuted} data-state="none">{t('capabilityNone')}</span>
-                : p.capabilities.map(name => (HostTag !== null
-                    ? <HostTag key={name} tone="outline" className={css.capChip}>{capabilityLabel(name)}</HostTag>
-                    : <span key={name} className={css.capChip}>{capabilityLabel(name)}</span>
-                  ))}
-            {redLines.filter(line => !redLineIsUrgent(line)).map(line => (
-              <span key={line} className={css.capFact}>{redLineLabel(line)}</span>
-            ))}
+                : p.capabilities.map(name => chip(name))}
           </div>
           <p className={css.capCaveat}>
             <span className={css.capCaveatNote}>{t('capabilityNote')}</span>

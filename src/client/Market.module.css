@@ -185,7 +185,12 @@
 .confirmPanel .caps{gap:6px;padding:0}
 .confirmPanel .caps .capChip{background:var(--fold-on-ink,#fff);border:1px solid var(--fold-border,#e7e8ea);border-radius:999px;padding:2px 8px;color:var(--fold-ink,#1c1d1f);font-size:12px;line-height:18px}
 .confirmPanel .caps .capMuted{border-color:var(--fold-border,#e7e8ea);color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;line-height:18px;padding:2px 8px}
-.confirmPanel .caps .capFact{flex-basis:100%;margin:2px 0 0;font-size:13px;line-height:20px;color:var(--fold-ink,#1c1d1f)}
+.capAhead{display:flex;flex-direction:column;gap:6px}
+.capAheadLabel{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280)}
+.capAheadRow{display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary,#1f2328)}
+.capAheadIcon{flex:none;margin-top:2px;color:var(--dsw-alias-label-primary,#1f2328)}
+.capAheadMore{align-self:flex-start;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.capAheadMore:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4176e6);outline-offset:2px}
 .confirmPanel .capCaveat{color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;line-height:18px}
 .installCaution{background:color-mix(in srgb, var(--dsw-alias-state-warn-primary, #b45309) 12%, transparent);border-radius:8px;padding:12px 13px}
 .installCautionLabel{margin:0 0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#6b7280)}
@@ -685,10 +690,6 @@
 .capsTitle{color:var(--dsw-alias-label-secondary,#8b949e);cursor:help}
 .capChip{border:1px solid var(--dsw-alias-border-l2,#30363d);border-radius:999px;padding:0 6px;color:var(--dsw-alias-label-primary,#c9d1d9);white-space:nowrap}
 .capMuted{border:1px dashed var(--dsw-alias-border-l2,#30363d);border-radius:999px;padding:0 6px;color:var(--dsw-alias-label-secondary,#8b949e);white-space:nowrap}
-/* The scanned facts that are not warnings: same quiet tone as the chips they
-   sit beside, because they are the same kind of thing — a statement about the
-   plugin, not a judgement about it. */
-.capFact{color:var(--dsw-alias-label-secondary,#8b949e)}
 /* The honesty clause under the facts. It was a hover tooltip while this row sat
    on a card; it is body copy now, because the reader who opened this is the
    reader who needs it. */
