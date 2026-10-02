@@ -751,6 +751,7 @@ describe('MarketSection (jsdom)', () => {
       category: ['tools'], npm: 'dsh-loop', stars: 50, added: '2026-08-01', version: '1.2.3',
       downloads: 162500, downloadsStart: '2026-08-01', downloadsEnd: '2026-08-28', downloadsCheckedAt: '2026-08-28',
       description: { en: 'Loop task runner', zh: '循环执行' }, install: 'dsh plugin install dsh-loop',
+      capabilities: ['network'],
     }
     const tip = downloadStatsText(plugin, key => en[key])!
     stubFetch({
@@ -807,6 +808,7 @@ describe('MarketSection (jsdom)', () => {
           name: 'dsh-tui', owner: 'alice', url: 'https://github.com/alice/dsh-tui',
           category: 'tools', npm: null, stars: 1, added: '2026-08-01',
           description: { en: 'A terminal UI', zh: '终端界面' }, install: 'dsh plugin install dsh-tui',
+          capabilities: ['shell'],
         }],
       },
     },
@@ -857,13 +859,13 @@ describe('MarketSection (jsdom)', () => {
     fireEvent.click(screen.getByRole('button', { name: en.install }))
     fireEvent.click(await screen.findByText(en.capabilityTitle))
     fireEvent.click(screen.getByText(en.cmdDetails))
-    expect(screen.getByText(en.capabilityNote)).toBeTruthy()
+    expect(screen.getByText(en.capShell)).toBeTruthy()
     expect(screen.getByText('dsh plugin install dsh-tui')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: en.cancel }))
 
     fireEvent.click(screen.getByRole('button', { name: en.install }))
     await screen.findByText(en.capabilityTitle)
-    expect(screen.queryByText(en.capabilityNote)).toBeNull()
+    expect(screen.queryByText(en.capShell)).toBeNull()
     expect(screen.queryByText('dsh plugin install dsh-tui')).toBeNull()
   })
 
@@ -4868,10 +4870,11 @@ describe('capability disclosure (#401)', () => {
    * a line nobody reads — and the one line worth stopping for (a script that
    * runs as you install) was lost among the ones that only describe what
    * plugins normally do. So these tests hold the card staying silent, the
-   * dialog leading with the install-time warning, quiet red lines plus
-   * dynamic code and host-runtime standing in front of a closed fold, the
-   * full capability list one click away, and the three states ("detected",
-   * "nothing found", "never scanned") staying three sentences.
+   * dialog leading with the install-time warning, the credentials red line
+   * and dynamic code standing in front of a closed fold, the full capability
+   * list one click away with the blind spot always printed, and the three
+   * states ("detected", "nothing found", "never scanned") staying three
+   * sentences.
    */
   const base = {
     name: 'dsh-probe-target', owner: 'alice', url: 'https://github.com/alice/dsh-probe-target',
@@ -4935,18 +4938,27 @@ describe('capability disclosure (#401)', () => {
     expect(dialog.getByText(en.capRedCredentialsNetwork)).toBeTruthy()
     expect(dialog.queryByText(en.capCredentials)).toBeNull()
     expect(dialog.queryByText(en.capShell)).toBeNull()
-    expect(dialog.queryByText(en.capabilityNote)).toBeNull()
+    // The blind spot is printed before anything is opened.
+    expect(dialog.getByText(en.capabilityNote)).toBeTruthy()
+    expect(dialog.queryByText(en.capabilityScannedAt.replace('{0}', '2026-09-24'))).toBeNull()
 
     fireEvent.click(dialog.getByText(en.capabilityTitle))
     expect(dialog.getByText(en.capCredentials)).toBeTruthy()
     expect(dialog.getByText(en.capShell)).toBeTruthy()
     expect(dialog.getByText(en.capFsWrite)).toBeTruthy()
-    const caveat = dialog.getByText((_, node) => node?.tagName === 'P'
-      && (node.textContent ?? '').includes(en.capabilityNote)
-      && (node.textContent ?? '').includes(en.capabilityScannedAt.replace('{0}', '2026-09-24')))
-    expect(caveat.getElementsByClassName(css.capCaveatAt)[0]?.textContent).toBe(en.capabilityScannedAt.replace('{0}', '2026-09-24'))
+    expect(dialog.getByText(en.capabilityScannedAt.replace('{0}', '2026-09-24')).classList.contains(css.capCaveatAt)).toBe(true)
     // Disclosure, never verdict.
     expect(dialog.queryByText(/^safe$/i)).toBeNull()
+  })
+
+  it('prints the blind spot on a dialog with nothing in front of the list', async () => {
+    // Without this line, a dialog that shows no facts reads as a clean scan.
+    withEntry({ capabilities: ['fs-read', 'network'], capabilityRedLines: [] })
+    render(<MarketSection {...props()} />)
+    await screen.findByText('dsh-probe-target')
+    const dialog = await openDetail()
+    expect(dialog.queryByText(en.capabilityAhead)).toBeNull()
+    expect(dialog.getByText(en.capabilityNote)).toBeTruthy()
   })
 
   it('translates every rule family the scanner can emit', async () => {
@@ -4963,6 +4975,7 @@ describe('capability disclosure (#401)', () => {
     render(<MarketSection {...props()} />)
     await screen.findByText('dsh-probe-target')
     const dialog = await openDetail()
+    fireEvent.click(dialog.getByText(en.capabilityTitle))
     for (const [, label] of families) expect(dialog.getByText(label)).toBeTruthy()
   })
 
@@ -5001,6 +5014,40 @@ describe('capability disclosure (#401)', () => {
     expect(dialog.queryByText(en.capRedCoreDisable.replace('{0}', 'dsh-base'))).toBeNull()
   })
 
+  it('counts what the fold holds in its title, and groups it by what it touches', async () => {
+    withEntry({
+      capabilities: ['fs-read', 'network', 'shell', 'credentials', 'dynamic-code', 'writes-clipboard'],
+      capabilityRedLines: [],
+      capabilityCheckedAt: '2026-09-24T12:00:00Z',
+    })
+    render(<MarketSection {...props()} />)
+    await screen.findByText('dsh-probe-target')
+    const dialog = await openDetail()
+    // Closed, the title already says how much is inside and how much of it is uncommon.
+    expect(dialog.getByText(en.capabilityCountUncommon.replace('{0}', '6').replace('{1}', '2'))).toBeTruthy()
+    expect(dialog.queryByText(en.capGroupFiles)).toBeNull()
+
+    fireEvent.click(dialog.getByText(en.capabilityTitle))
+    for (const key of ['capGroupFiles', 'capGroupNetwork', 'capGroupRun', 'capGroupKeys', 'capGroupOther'] as const) {
+      expect(dialog.getByText(en[key])).toBeTruthy()
+    }
+    expect(dialog.queryByText(en.capGroupHost)).toBeNull()
+    expect(dialog.getByText(en.capCredentials).classList.contains(css.capChipUncommon)).toBe(true)
+    expect(dialog.getByText(en.capShell).classList.contains(css.capChipUncommon)).toBe(false)
+    expect(dialog.getByText('writes-clipboard').classList.contains(css.capChipUncommon)).toBe(false)
+    expect(dialog.getByText(en.capabilityUncommonLegend)).toBeTruthy()
+  })
+
+  it('drops the uncommon half of the title and the legend when nothing uncommon was found', async () => {
+    withEntry({ capabilities: ['fs-read', 'network'], capabilityRedLines: [] })
+    render(<MarketSection {...props()} />)
+    await screen.findByText('dsh-probe-target')
+    const dialog = await openDetail()
+    expect(dialog.getByText(en.capabilityCount.replace('{0}', '2'))).toBeTruthy()
+    fireEvent.click(dialog.getByText(en.capabilityTitle))
+    expect(dialog.queryByText(en.capabilityUncommonLegend)).toBeNull()
+  })
+
   it('separates "nothing found" from "never scanned"', async () => {
     withEntry({ capabilities: [], capabilityRedLines: [] })
     render(<MarketSection {...props()} />)
@@ -5012,17 +5059,23 @@ describe('capability disclosure (#401)', () => {
     expect(dialog.queryByText(en.capabilityUnchecked)).toBeNull()
     cleanup()
 
+    // Never scanned: the panel's frame, with the state in plain sight. No fold
+    // that opens onto one sentence, and no blind-spot note about a scan that
+    // did not happen.
     withEntry({})
     render(<MarketSection {...props()} />)
     await screen.findByText('dsh-probe-target')
     dialog = await openDetail()
-    expect(dialog.queryByText(en.capabilityUnchecked)).toBeNull()
-    fireEvent.click(dialog.getByText(en.capabilityTitle))
-    expect(dialog.getByText(en.capabilityUnchecked)).toBeTruthy()
+    const unchecked = dialog.getByText(en.capabilityUnchecked)
+    expect(unchecked.closest('[data-state]')?.getAttribute('data-state')).toBe('unchecked')
+    expect(dialog.getByText(en.capabilityTitle).closest('button')).toBeNull()
+    expect(dialog.queryByText(en.capabilityNote)).toBeNull()
     expect(dialog.queryByText(en.capabilityNone)).toBeNull()
   })
 
-  it('puts dynamic code and a host-runtime dependency in front, and leaves the rest in the fold', async () => {
+  it('puts dynamic code in front, and leaves a host-runtime dependency in the fold', async () => {
+    // host-runtime is a package.json dependency on a DSH host package, not a
+    // change to DSH — the install-time core-tamper line is the one that is.
     withEntry({
       capabilities: ['shell', 'fs-read', 'credentials', 'dynamic-code', 'host-runtime', 'writes-clipboard'],
       capabilityRedLines: [],
@@ -5032,15 +5085,14 @@ describe('capability disclosure (#401)', () => {
     const dialog = await openDetail()
     expect(dialog.getByText(en.capabilityAhead)).toBeTruthy()
     expect(dialog.getByText(en.capDynamicCode)).toBeTruthy()
-    expect(dialog.getByText(en.capHostRuntime)).toBeTruthy()
+    expect(dialog.queryByText(en.capHostRuntime)).toBeNull()
     expect(dialog.queryByText(en.capCredentials)).toBeNull()
     expect(dialog.queryByText('writes-clipboard')).toBeNull()
-    expect(dialog.queryByText(en.capShell)).toBeNull()
     fireEvent.click(dialog.getByText(en.capabilityTitle))
+    expect(dialog.getByText(en.capHostRuntime)).toBeTruthy()
     expect(dialog.getByText(en.capCredentials)).toBeTruthy()
     expect(dialog.getByText('writes-clipboard')).toBeTruthy()
     expect(dialog.getByText(en.capShell)).toBeTruthy()
-    expect(dialog.getByText(en.capFsRead)).toBeTruthy()
   })
 
   it('keeps the fold closed when the scan found only ordinary capabilities', async () => {
@@ -5057,34 +5109,44 @@ describe('capability disclosure (#401)', () => {
     expect(dialog.getByText(en.capShell)).toBeTruthy()
   })
 
-  it('tucks a fourth ahead fact behind a count', async () => {
-    const lines = [
-      'reads credentials/secrets AND has network access',
-      'uses plaintext http:// to schemas.example.org',
-      'uses literal IP 169.254.169.254 for network access',
-    ]
+  it('keeps plaintext-http and literal-IP lines in the fold, not in front of it', async () => {
+    // Each names one address matched from source text — often a schema URL in
+    // a bundled library. Standing beside the credentials line, they would read
+    // as the same kind of fact.
     withEntry({
-      capabilities: ['dynamic-code', 'host-runtime', 'network'],
-      capabilityRedLines: lines,
+      capabilities: ['network'],
+      capabilityRedLines: [
+        'reads credentials/secrets AND has network access',
+        'uses plaintext http:// to schemas.example.org',
+        'uses literal IP 169.254.169.254 for network access',
+      ],
     })
     render(<MarketSection {...props()} />)
     await screen.findByText('dsh-probe-target')
     const dialog = await openDetail()
     expect(dialog.getByText(en.capRedCredentialsNetwork)).toBeTruthy()
+    expect(dialog.queryByText(en.capRedPlaintextHttp.replace('{0}', 'schemas.example.org'))).toBeNull()
+    expect(dialog.queryByText(en.capRedLiteralIp.replace('{0}', '169.254.169.254'))).toBeNull()
+    fireEvent.click(dialog.getByText(en.capabilityTitle))
     expect(dialog.getByText(en.capRedPlaintextHttp.replace('{0}', 'schemas.example.org'))).toBeTruthy()
     expect(dialog.getByText(en.capRedLiteralIp.replace('{0}', '169.254.169.254'))).toBeTruthy()
-    expect(dialog.queryByText(en.capDynamicCode)).toBeNull()
-    expect(dialog.queryByText(en.capHostRuntime)).toBeNull()
-    fireEvent.click(dialog.getByRole('button', { name: en.capabilityAheadMore.replace('{0}', '2') }))
-    expect(dialog.getByText(en.capDynamicCode)).toBeTruthy()
-    expect(dialog.getByText(en.capHostRuntime)).toBeTruthy()
+  })
+
+  it('shows only plaintext-http in the fold when it is the only red line', async () => {
+    withEntry({ capabilities: ['network'], capabilityRedLines: ['uses plaintext http:// to schemas.example.org'] })
+    render(<MarketSection {...props()} />)
+    await screen.findByText('dsh-probe-target')
+    const dialog = await openDetail()
+    expect(dialog.queryByText(en.capabilityAhead)).toBeNull()
+    fireEvent.click(dialog.getByText(en.capabilityTitle))
+    expect(dialog.getByText(en.capRedPlaintextHttp.replace('{0}', 'schemas.example.org'))).toBeTruthy()
   })
 
   it('shows a capability name this build has no label for, rather than dropping it', async () => {
     // An unlabelled fact is still a fact: a missing chip would read as "does
     // not do that" — the one failure mode a disclosure must not have.
-    // dynamic-code is one of the three lines in front; the unknown name stays
-    // in the list, under its own spelling.
+    // dynamic-code is in front; the unknown name stays in the list, under its
+    // own spelling.
     withEntry({ capabilities: ['dynamic-code', 'writes-clipboard'], capabilityRedLines: [] })
     render(<MarketSection {...props()} />)
     await screen.findByText('dsh-probe-target')
