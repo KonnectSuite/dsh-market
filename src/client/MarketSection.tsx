@@ -4829,11 +4829,12 @@ export function MarketSection(props: MarketSectionProps) {
    * fires at install time, drawn above everything else. `aheadFacts` follow
    * as plain sentences in body ink. The closed fold holds every capability,
    * grouped by what it touches, with the uncommon ones filled and counted in
-   * the fold's title, plus the address red lines. A plugin never scanned gets
-   * the fold's frame with nothing to open, so the state is seen without a
-   * click and never mistaken for an empty scan. The blind-spot sentence sits under the fold in
-   * every dialog, so a dialog with nothing in front is not read as a clean
-   * scan. Nothing here scores, bands, or colours a plugin safe.
+   * the fold's title as a frequency, plus the address red lines. The
+   * blind-spot sentence sits under the fold whenever a scan ran, so a dialog
+   * with nothing in front is not read as a clean scan. A plugin never scanned
+   * gets the fold's frame with nothing to open and no blind-spot sentence:
+   * the state is seen without a click, and there is no scan to qualify.
+   * Nothing here scores, bands, or colours a plugin safe.
    */
   const capabilityDetail = (p: RegistryPlugin) => {
     const redLines = p.capabilityRedLines ?? []

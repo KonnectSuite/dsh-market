@@ -173,7 +173,7 @@
 .confirmTerminalIcon{display:block;flex:none;color:var(--fold-ink)}
 .confirmTerminalPrompt{stroke:var(--fold-on-ink);fill:none}
 .confirmTerminalDot{fill:var(--fold-on-ink)}
-.confirmPanelTitle{flex:1;min-width:0;font-size:13px;line-height:20px;color:var(--fold-ink)}
+.confirmPanelTitle{flex:1 0 auto;min-width:0;font-size:13px;line-height:20px;color:var(--fold-ink)}
 .confirmPanelRowStatic{cursor:default}
 .confirmPanel[data-state="unchecked"]{border-style:dashed;background:color-mix(in srgb, var(--fold-bg) 35%, transparent)}
 .confirmPanelMeta{flex:0 1 auto;min-width:0;font-size:12px;line-height:20px;color:var(--dsw-alias-label-secondary,#6b7280);text-align:right}
