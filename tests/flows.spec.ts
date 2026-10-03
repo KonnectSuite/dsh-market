@@ -713,6 +713,7 @@ import { RELEASE_AGE_OVERRIDE } from '../src/install.ts'
 import { resolveChannel } from '../src/channels.ts'
 import { profileDir } from '../src/profile.ts'
 import { runDshPlugin } from '../src/dsh-cli.ts'
+import { createOfficialDesktopRuntime } from '../src/official-desktop.ts'
 import { setTrustedHostsSource } from '../src/http.ts'
 import type { AgentsServiceLike } from '../src/agents.ts'
 
@@ -2678,6 +2679,68 @@ describe('update flow — no npm publishing required', () => {
     expect(ran).not.toContain('themer@latest')
     expect(ran).not.toContain('themer@9.9.9')
     expect(fake.calls.some(call => call.some(arg => /themer@(latest|9\.9\.9)/.test(arg)))).toBe(false)
+  })
+
+  it('re-resolves a floating git spec with `add` on a host that refuses `update` (#786)', async () => {
+    // The official desktop profile's in-process manager takes exactly
+    // `add <target>` or `remove <target>` and answers anything else with exit
+    // 127 (official-desktop.ts). The in-place re-resolve above went out as
+    // `update`, so on that host every update of a floating-git plugin failed
+    // before pnpm was ever reached — the user's only recourse was editing
+    // pnpm-workspace.yaml and running pnpm by hand.
+    //
+    // It does not have to be refused. What leaves `add` nothing to change is
+    // `pnpm install`'s skipped resolution, not `pnpm add`'s: measured on pnpm
+    // 11.7.0 against a remote whose HEAD was advanced between two runs,
+    // `pnpm install` answered "Already up to date" and left the lockfile
+    // commit alone, while `pnpm add <that identical spec>` re-resolved it to
+    // the new HEAD. So the re-resolve is expressible as `add <spec>`, which
+    // this host does take.
+    const gitea = 'git+https://gitea.example.com/me/themer.git'
+    fake.repos[gitea] = { name: 'themer', manifest: { dsh: {}, main: 'index.js' }, artifacts: ['index.js'] }
+    const manifestPath = join(profileDir('web'), 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.dependencies = { ...(manifest.dependencies ?? {}), themer: gitea }
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    mkdirSync(join(profileDir('web'), 'node_modules', 'themer'), { recursive: true })
+    writeFileSync(
+      join(profileDir('web'), 'node_modules', 'themer', 'package.json'),
+      JSON.stringify({ name: 'themer', version: '0.1.0', dsh: {}, main: 'index.js' }),
+    )
+    writeFileSync(join(profileDir('web'), 'node_modules', 'themer', 'index.js'), 'export {}\n')
+
+    // The real runtime decides which operations this host takes, so the
+    // refusal under test is the shipped one rather than a description of it.
+    // FakeDsh stays the pnpm half, which keeps the file effects real.
+    const manager = {
+      installBundle: async (spec: string) => {
+        const ran = await runDshPlugin('desktop', ['add', spec]) as { exitCode: number; stdout: string; stderr: string }
+        return ran.exitCode === 0
+          ? { application: 'restart-required', packageResult: { exitCode: 0, output: ran.stdout } }
+          : { application: 'failed', error: ran.stderr, packageResult: { exitCode: ran.exitCode, output: ran.stdout } }
+      },
+      removeBundle: async (name: string) => {
+        const ran = await runDshPlugin('desktop', ['remove', name]) as { exitCode: number; stdout: string; stderr: string }
+        return {
+          application: ran.exitCode === 0 ? 'applied' : 'failed',
+          packageResult: { exitCode: ran.exitCode, output: ran.stdout },
+        }
+      },
+      cancelInstall: async () => ({ status: 'cancelled' }),
+    }
+    bed.dispose()
+    bed = createTestbed({}, createOfficialDesktopRuntime(() => manager, 'web', profileDir('web')))
+
+    fake.calls = []
+    const updated = await bed.dispatch('POST', '/dsh-market/update', { name: 'themer' })
+    expect(updated.status).toBe(200)
+    expect(fake.calls.at(-1)?.[0], 'this host takes `add`; `update` is refused before pnpm runs').toBe('add')
+    expect(fake.calls.at(-1)).toContain(gitea)
+    expect(fake.calls.some(call => call[0] === 'update')).toBe(false)
+    // Still an in-place re-resolve: the remote stays the source.
+    expect(installedSpec('themer')).toBe(gitea)
+    const ran = fake.calls.map(call => call.join(' ')).join('\n')
+    expect(ran).not.toContain('themer@latest')
   })
 
   it('keeps a github subpath while dropping revision selectors during update (#281)', async () => {
