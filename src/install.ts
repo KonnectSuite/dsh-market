@@ -285,6 +285,19 @@ export async function withHoistRecovery(
       result = { ...result, stderr: `${result.stderr}\n\n${code}${result.pnpmError}` }
     }
   }
+  if (!marketFlags && !ok(result) && !result.cancelled
+    && classifyPnpmFailure(`${result.stderr}\n${result.stdout}`, result.exitCode)?.code === 'windows-file-locked') {
+    // The classified text offers "run it from the command line with the app
+    // closed". On the official desktop app that is the one thing the market
+    // does not do for the user — it never falls back to `dsh plugin --profile
+    // desktop`, which is forbidden there — so the advice sent the reporter to a
+    // door the market itself keeps shut (#798). Say what to do instead: the
+    // app's own Plugins page runs the same managed pipeline.
+    result = {
+      ...result,
+      stderr: `${result.stderr}\n\n这是官方桌面端：上面「在命令行执行」这一条在这里用不了，请改在应用自己的「设置 → 插件」里操作（退出重启后，或先停用加载该包的插件再重启）。 / This is the official desktop app: the "run it from the command line" option above is not available here — use the app's own Settings → Plugins instead (after restarting, or after disabling the plugin that loads this package and restarting).`,
+    }
+  }
   if (unavailableOption !== null && !ok(result) && !result.cancelled) {
     // #732: this step was skipped because the host runs pnpm itself and takes
     // no options from us — but the classified message above says the market

@@ -170,6 +170,28 @@ describe('classifyPnpmFailure', () => {
     expect(failed?.message).toContain('not a page refresh')
   })
 
+  it('names the way out that works when restarting alone does not, and says the lock spreads (#798)', () => {
+    // Verbatim shape from the reporter's own pnpm.log, a native binding the host
+    // loads at startup. Restarting does not help because the package is loaded
+    // again before anything can touch it; what worked was switching off the
+    // plugin that loads it, restarting, and doing the operation then. The old
+    // text ruled that out in one sentence ("disabling is not enough") and sent
+    // the reader back to the two things that had already failed.
+    const failed = classifyPnpmFailure(String.raw`[ERR_PNPM_EPERM] [importPackage C:\dsh\profiles\desktop\node_modules\@trycua\cua-driver-win32-x64-msvc] EPERM: operation not permitted, rename 'C:\dsh\profiles\desktop\node_modules\@trycua\cua-driver-win32-x64-msvc_tmp_26500_6' -> 'C:\dsh\profiles\desktop\node_modules\@trycua\cua-driver-win32-x64-msvc'`)
+
+    expect(failed?.pkg).toBe('@trycua/cua-driver-win32-x64-msvc')
+    // The package is named, and the message says it blocks the OTHER plugins' work.
+    expect(failed?.message).toContain('@trycua/cua-driver-win32-x64-msvc')
+    expect(failed?.message).toContain('其他')
+    expect(failed?.message).toContain('every OTHER plugin operation')
+    // The workable path, in both languages.
+    expect(failed?.message).toContain('先停用加载它的插件，再重启')
+    expect(failed?.message).toContain('disable the plugin that loads it, restart')
+    // It no longer says disabling is "not enough" without the restart that makes it enough.
+    expect(failed?.message).not.toContain('停用插件、甚至卸载插件都不够')
+    expect(failed?.message).not.toContain('undefined')
+  })
+
   it('classifies pnpm 12\'s wording of the refused swap the same way (#608)', () => {
     // pnpm 12's native CLI reports the same refused swap without an
     // ERR_PNPM_ code, seen on macOS with the target directory locked; the

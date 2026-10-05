@@ -541,6 +541,35 @@ describe('withHoistRecovery', () => {
     expect(result.stderr).toContain(RELEASE_AGE_OVERRIDE)
   })
 
+  describe('a locked package directory on the official desktop app (#798)', () => {
+    // pnpm names the native binding the host loaded at startup. The classified
+    // text offers "run it from the command line with the app closed", which is
+    // the one thing the market never does on the official desktop app — it
+    // refuses to fall back to `dsh plugin --profile desktop`. So the advice sent
+    // the reporter to a door the market itself keeps shut.
+    const LOCKED = String.raw`[ERR_PNPM_EPERM] [importPackage C:\dsh\profiles\desktop\node_modules\@trycua\cua-driver-win32-x64-msvc] EPERM: operation not permitted, rename 'C:\dsh\profiles\desktop\node_modules\@trycua\cua-driver-win32-x64-msvc_tmp_26500_6' -> 'C:\dsh\profiles\desktop\node_modules\@trycua\cua-driver-win32-x64-msvc'`
+    const failing = async (): Promise<InstallResult> => ({ exitCode: 1, timedOut: false, stdout: '', stderr: LOCKED, cancelled: false })
+
+    it('says the command-line way is not available there, and where to go instead', async () => {
+      const result = await withHoistRecovery(failing, 'desktop', ['add', 'thing'], undefined, { marketFlags: false })
+      expect(result.stderr).toContain('官方桌面端')
+      expect(result.stderr).toContain('设置 → 插件')
+      expect(result.stderr).toContain("the \"run it from the command line\" option above is not available here")
+    })
+
+    it('leaves the ordinary host\'s message alone, where the command line IS an option', async () => {
+      const result = await withHoistRecovery(failing, 'web', ['add', 'thing'])
+      expect(result.stderr).not.toContain('官方桌面端')
+      expect(result.stderr).toContain('run it from the command line')
+    })
+
+    it('adds nothing for a different failure on the desktop app', async () => {
+      const other = async (): Promise<InstallResult> => ({ exitCode: 1, timedOut: false, stdout: '', stderr: 'ERR_PNPM_FETCH_404  GET https://x/y.tgz: Not Found - 404', cancelled: false })
+      const result = await withHoistRecovery(other, 'desktop', ['add', 'thing'], undefined, { marketFlags: false })
+      expect(result.stderr).not.toContain('设置 → 插件')
+    })
+  })
+
   it('still uses the one-shot override where the host accepts options', async () => {
     const calls: string[][] = []
     const run = async (_profile: string, args: string[]): Promise<InstallResult> => {
