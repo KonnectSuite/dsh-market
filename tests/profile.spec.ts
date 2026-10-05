@@ -658,11 +658,15 @@ describe('bundle patch readers vs an array declaration (#792)', () => {
     expect(bundlePatchInsertedIds(dir)).toEqual(['arr-a', 'arr-b'])
   })
 
-  it('keeps the readable files in effect when one declared file is missing', () => {
+  it('answers nothing when any declared file is unreadable', () => {
+    // All or nothing, mirroring the host: one missing overlay file makes
+    // loadOverlayPatches throw and the whole bundle is skipped — the
+    // readable remainder may not stay in effect on the market's side.
     const dir = carrier('partial-patch', ['./gone.patch.yml', './b.patch.yml'], {
       'b.patch.yml': '- insert:\n    - id: arr-b\n      name: dep-b\n',
     })
-    expect(bundlePatchTargets(dir)).toEqual(['dep-b'])
+    expect(bundlePatchTargets(dir)).toEqual([])
+    expect(bundlePatchInsertedIds(dir)).toEqual([])
   })
 })
 
@@ -717,57 +721,6 @@ describe('declaredBundlePatchFiles — one patch file or a list (#792)', () => {
     writeFileSync(join(dir, 'package.json'), '{broken')
     expect(declaredBundlePatchFiles(dir)).toEqual([])
     expect(declaredBundlePatchFiles(join(dir, 'absent'))).toEqual([])
-  })
-})
-
-/**
- * #792: the loader resolves a bundle's mounts from TWO anchors — the dsh
- * installation first, then the profile. A carrier naming an in-box package
- * that only exists inside the installation resolves there and nowhere the
- * profile-side lookups used to reach, so the market kept calling the install
- * broken. The install directory is injectable for exactly this test.
- */
-describe('hasLoadableEntry — the dsh installation anchor (#792)', () => {
-  function writeLoadable(dir: string): void {
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), '{"name":"x"}')
-    writeFileSync(join(dir, 'index.js'), '')
-  }
-
-  /** A pure carrier: a declared patch, no entry artifact of its own. */
-  function carrier(profile: string, target: string): void {
-    const dir = join(profile, 'node_modules', 'carrier')
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), '{"dsh":{"bundle":{"patch":"cordis.patch.yml"}}}')
-    writeFileSync(join(dir, 'cordis.patch.yml'), `- name: '${target}'\n  config: {}\n`)
-  }
-
-  it('finds a mount target that only exists inside the dsh installation', () => {
-    const profile = writeProfile({})
-    carrier(profile, 'in-box-host')
-    const install = join(home, 'install')
-    writeLoadable(join(install, 'node_modules', 'in-box-host'))
-    expect(hasLoadableEntry(profile, 'carrier', install)).toBe(true)
-  })
-
-  it('finds a mount target sitting beside the dsh package, one level up', () => {
-    // The ordinary install layout: node_modules/@deepseek-ai/dsh, with its
-    // siblings resolved from the level above the package directory — the
-    // second path Node's resolution walk yields from that anchor.
-    const profile = writeProfile({})
-    carrier(profile, 'in-box-host')
-    const install = join(home, 'install')
-    writeLoadable(join(dirname(install), 'node_modules', 'in-box-host'))
-    expect(hasLoadableEntry(profile, 'carrier', install)).toBe(true)
-  })
-
-  it('still refuses a carrier whose target exists nowhere, anchor or not', () => {
-    const profile = writeProfile({})
-    carrier(profile, 'nowhere-at-all')
-    const install = join(home, 'install')
-    mkdirSync(install, { recursive: true })
-    expect(hasLoadableEntry(profile, 'carrier', install)).toBe(false)
-    expect(hasLoadableEntry(profile, 'carrier', null)).toBe(false)
   })
 })
 

@@ -674,25 +674,40 @@ export async function hotMount(ctx: HotContext, profileDir: string, packageName:
     // convention, and `profile.ts` resolves the declared field for everything
     // else, so the two now agree on where a patch is. #792: the declaration
     // may also be a LIST of files, which the host composes in order — read
-    // every declared one and parse the concatenation; a file that cannot be
-    // read contributes nothing instead of sinking the rest.
+    // every declared one and parse the concatenation, all or nothing: the
+    // host throws on one missing overlay file and skips the entire bundle.
     const packageRoot = join(profileDir, 'node_modules', packageName)
     const declared = declaredBundlePatchFiles(packageRoot)
     const sources = declared.length > 0 ? declared : [join(packageRoot, 'cordis.patch.yml')]
-    const texts: string[] = []
+    let texts: string[] | null = []
     for (const file of sources) {
       try {
         texts.push(readFileSync(file, 'utf8'))
-      } catch { /* try the next location */ }
+      } catch {
+        // All or nothing, same rule as readBundlePatchRows: one unreadable
+        // file voids the whole declaration — the host drops the entire
+        // bundle for one missing overlay file, so mounting the readable
+        // remainder would show live what the next boot never loads.
+        texts = null
+        break
+      }
     }
     let rows: HotRow[] | null
-    if (texts.length > 0) {
+    if (texts !== null && texts.length > 0) {
       rows = parseSimplePatch(texts.join('\n'))
       if (rows === null) {
         return {
           ok: false,
           reason: 'bundle patch 含配置行/表达式,热挂载仅支持纯 insert,重启后生效 / the bundle patch contains config/expression rows; hot-mount only supports plain inserts — it activates on restart',
         }
+      }
+    } else if (declared.length > 0) {
+      // The declaration is VOID — one of its files cannot be read. The host
+      // throws on a missing overlay file and skips the ENTIRE bundle, so no
+      // part of this package can go live, now or after a restart.
+      return {
+        ok: false,
+        reason: '声明的 patch 文件缺失或不可读,宿主会跳过整个 bundle,请修复或重装该包 / a declared patch file is unreadable; the host skips the whole bundle — fix or reinstall the package',
       }
     } else {
       // No host patch. Client-only packages (dsh.client, no dsh.bundle) never

@@ -5,10 +5,8 @@
  */
 
 import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { findDshInstallDir } from './dsh-install.ts'
 import { resolveDshHome } from './home-paths.ts'
 import { githubRemoteIdentities, githubRepoIdentities, isGitHostedSpec, repoOfTarget } from './sources.ts'
 
@@ -884,20 +882,22 @@ export function declaredBundlePatchFiles(dir: string): string[] {
 }
 
 function readBundlePatchRows(dir: string): { names: string[]; ids: string[]; insertedIds: string[] } {
-  const rows: { names: string[]; ids: string[]; insertedIds: string[] } = { names: [], ids: [], insertedIds: [] }
-  for (const file of declaredBundlePatchFiles(dir)) {
-    try {
+  try {
+    const rows: { names: string[]; ids: string[]; insertedIds: string[] } = { names: [], ids: [], insertedIds: [] }
+    for (const file of declaredBundlePatchFiles(dir)) {
       const parsed = parsePatchRows(readFileSync(file, 'utf8'))
       rows.names.push(...parsed.names)
       rows.ids.push(...parsed.ids)
       rows.insertedIds.push(...parsed.insertedIds)
-    } catch {
-      // A missing or unreadable file contributes nothing; the remaining
-      // declared files stay in effect — the host also skips one bad overlay
-      // without dropping the rest of the bundle.
     }
+    return rows
+  } catch {
+    // All or nothing: one unreadable file voids the whole declaration. The
+    // host's loadOverlayPatches throws on a missing overlay file and
+    // loadProfileDirectory then skips the ENTIRE bundle — a partially
+    // applied list would judge a package the host never loads.
+    return { names: [], ids: [], insertedIds: [] }
   }
-  return rows
 }
 
 /** The profile manifest's `dsh.profile.bundles` — what the CLI reconciled. */
@@ -1023,15 +1023,8 @@ export function conflictingEntryIds(
  * broken AND uninstalled it right after installing.
  * @param profileDirectory - resolved profile directory (host-authoritative under Desktop).
  * @param name - installed package name.
- * @param dshInstallDir - the dsh installation directory, the loader's FIRST
- *   resolution anchor; defaults to locating the running host the same way
- *   every other host-facing read does. Injectable for tests.
  */
-export function hasLoadableEntry(
-  profileDirectory: string,
-  name: string,
-  dshInstallDir: string | null = findDshInstallDir(),
-): boolean {
+export function hasLoadableEntry(profileDirectory: string, name: string): boolean {
   const dir = join(profileDirectory, 'node_modules', name)
   if (entryArtifactExists(dir)) return true
   // A carrier is only sound when something it mounts is itself loadable.
@@ -1044,20 +1037,11 @@ export function hasLoadableEntry(
   // exiting 0 was immediately followed by the market removing what it had
   // just, correctly, installed.
   const workspaceRoot = dirname(profileDirectory)
-  // The installation anchor (#792): the loader resolves a bundle's packages
-  // from the dsh installation FIRST, then the profile (resolveBundleDir /
-  // packageDirFromAnchor in dsh-app-boot) — a carrier naming an in-box
-  // package that only exists inside the installation resolves from that
-  // anchor and nowhere the profile-side lookups above reach. The walk is
-  // Node's own node_modules search paths from an anchor inside the
-  // installation: nested node_modules, then up through the parent levels.
   return bundlePatchTargets(dir)
     .filter(target => target !== name)
     .some(target => entryArtifactExists(join(profileDirectory, 'node_modules', target))
       || entryArtifactExists(join(dir, 'node_modules', target))
-      || entryArtifactExists(join(workspaceRoot, 'node_modules', target))
-      || (dshInstallDir !== null && (createRequire(join(dshInstallDir, 'package.json')).resolve.paths(target) ?? [])
-        .some(searchPath => entryArtifactExists(join(searchPath, target)))))
+      || entryArtifactExists(join(workspaceRoot, 'node_modules', target)))
 }
 
 /** Plugin subdirectories (depth 2) of a collection checkout, as relative paths. */

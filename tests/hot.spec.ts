@@ -154,8 +154,10 @@ describe('hotMount reads every declared patch file (#792)', () => {
     }
   })
 
-  it('still mounts a carrier whose second declared file is missing', async () => {
-    // One unreadable file must not sink the readable one.
+  it('refuses a carrier whose declared list names a missing file', async () => {
+    // All or nothing, same rule as readBundlePatchRows: the host drops the
+    // entire bundle when one declared overlay file is missing, so nothing
+    // of this package may go live off the readable remainder.
     const dir = mkdtempSync(join(tmpdir(), 'dshm-hot-'))
     try {
       target(dir, 'dep-b')
@@ -164,8 +166,9 @@ describe('hotMount reads every declared patch file (#792)', () => {
       })
 
       const result = await hotMount(ctx, dir, 'partial-carrier')
-      expect(result.ok).toBe(true)
-      expect(mountedRows(dir)).toContain('mkt-arr-b')
+      expect(result.ok).toBe(false)
+      expect(String(result.reason)).toContain('声明的 patch 文件缺失')
+      expect(mountedRows(dir)).not.toContain('mkt-arr-b')
     } finally {
       for (const name of listHotMounts()) await hotUnmount(name)
       rmSync(dir, { recursive: true, force: true })
