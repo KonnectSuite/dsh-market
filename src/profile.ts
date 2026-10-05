@@ -5,8 +5,10 @@
  */
 
 import { existsSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { findDshInstallDir } from './dsh-install.ts'
 import { resolveDshHome } from './home-paths.ts'
 import { githubRemoteIdentities, githubRepoIdentities, isGitHostedSpec, repoOfTarget } from './sources.ts'
 
@@ -843,42 +845,59 @@ export function parsePatchRows(text: string): { names: string[]; ids: string[]; 
   return { names, ids, insertedIds }
 }
 
-/** Rows of the patch a package DECLARES through `dsh.bundle.patch`. */
 /**
- * Where a package's bundle patch lives, according to the package itself.
+ * Where a package's bundle patches live, according to the package itself.
  *
  * `dsh.bundle.patch` is the package's own declaration and the only place the
- * answer is written down: the path may be a subdirectory (`aegis` declares
- * `./extensions/dsh/cordis.patch.yml`), not just the package root. Callers
- * that assumed the root file made a plugin with a declared patch look like
- * one with none (#646) — so the resolution rule lives here, once.
+ * answer is written down. The host accepts a string (one file) or an ordered
+ * array of files — official dsh-web-app ships five — and composes them in
+ * order (`bundlePatchFiles` in dsh-app-boot). The market's read side hands
+ * down no verdict, so an array contributes its string items in order and an
+ * unreadable manifest or a declaration that is neither string nor array
+ * answers none instead of throwing (#792) — the same tolerance check.ts's
+ * `declaredList` applies to the boot check (#676). The path may name a
+ * subdirectory (`aegis` declares `./extensions/dsh/cordis.patch.yml`), not
+ * just the package root — callers that assumed the root file made a plugin
+ * with a declared patch look like one with none (#646) — so the resolution
+ * rule lives here, once.
  *
  * @param dir - the installed package directory.
- * @returns the declared patch file's path, or null when the manifest names
- *   none (or the manifest cannot be read).
+ * @returns the declared patch files' paths in declaration order, empty when
+ *   the manifest names none (or cannot be read).
  */
-export function declaredBundlePatchFile(dir: string): string | null {
+export function declaredBundlePatchFiles(dir: string): string[] {
   try {
     const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
       dsh?: { bundle?: { patch?: unknown } }
     }
     const declared = manifest.dsh?.bundle?.patch
-    if (typeof declared !== 'string' || declared === '') return null
-    return join(dir, declared)
+    let files: string[] = []
+    if (typeof declared === 'string') {
+      files = declared === '' ? [] : [declared]
+    } else if (Array.isArray(declared)) {
+      files = declared.filter((file): file is string => typeof file === 'string')
+    }
+    return files.map(file => join(dir, file))
   } catch {
-    return null
+    return []
   }
 }
 
 function readBundlePatchRows(dir: string): { names: string[]; ids: string[]; insertedIds: string[] } {
-  const empty = { names: [], ids: [], insertedIds: [] }
-  const file = declaredBundlePatchFile(dir)
-  if (file === null) return empty
-  try {
-    return parsePatchRows(readFileSync(file, 'utf8'))
-  } catch {
-    return empty
+  const rows: { names: string[]; ids: string[]; insertedIds: string[] } = { names: [], ids: [], insertedIds: [] }
+  for (const file of declaredBundlePatchFiles(dir)) {
+    try {
+      const parsed = parsePatchRows(readFileSync(file, 'utf8'))
+      rows.names.push(...parsed.names)
+      rows.ids.push(...parsed.ids)
+      rows.insertedIds.push(...parsed.insertedIds)
+    } catch {
+      // A missing or unreadable file contributes nothing; the remaining
+      // declared files stay in effect — the host also skips one bad overlay
+      // without dropping the rest of the bundle.
+    }
   }
+  return rows
 }
 
 /** The profile manifest's `dsh.profile.bundles` — what the CLI reconciled. */
@@ -1004,8 +1023,15 @@ export function conflictingEntryIds(
  * broken AND uninstalled it right after installing.
  * @param profileDirectory - resolved profile directory (host-authoritative under Desktop).
  * @param name - installed package name.
+ * @param dshInstallDir - the dsh installation directory, the loader's FIRST
+ *   resolution anchor; defaults to locating the running host the same way
+ *   every other host-facing read does. Injectable for tests.
  */
-export function hasLoadableEntry(profileDirectory: string, name: string): boolean {
+export function hasLoadableEntry(
+  profileDirectory: string,
+  name: string,
+  dshInstallDir: string | null = findDshInstallDir(),
+): boolean {
   const dir = join(profileDirectory, 'node_modules', name)
   if (entryArtifactExists(dir)) return true
   // A carrier is only sound when something it mounts is itself loadable.
@@ -1018,11 +1044,20 @@ export function hasLoadableEntry(profileDirectory: string, name: string): boolea
   // exiting 0 was immediately followed by the market removing what it had
   // just, correctly, installed.
   const workspaceRoot = dirname(profileDirectory)
+  // The installation anchor (#792): the loader resolves a bundle's packages
+  // from the dsh installation FIRST, then the profile (resolveBundleDir /
+  // packageDirFromAnchor in dsh-app-boot) — a carrier naming an in-box
+  // package that only exists inside the installation resolves from that
+  // anchor and nowhere the profile-side lookups above reach. The walk is
+  // Node's own node_modules search paths from an anchor inside the
+  // installation: nested node_modules, then up through the parent levels.
   return bundlePatchTargets(dir)
     .filter(target => target !== name)
     .some(target => entryArtifactExists(join(profileDirectory, 'node_modules', target))
       || entryArtifactExists(join(dir, 'node_modules', target))
-      || entryArtifactExists(join(workspaceRoot, 'node_modules', target)))
+      || entryArtifactExists(join(workspaceRoot, 'node_modules', target))
+      || (dshInstallDir !== null && (createRequire(join(dshInstallDir, 'package.json')).resolve.paths(target) ?? [])
+        .some(searchPath => entryArtifactExists(join(searchPath, target)))))
 }
 
 /** Plugin subdirectories (depth 2) of a collection checkout, as relative paths. */

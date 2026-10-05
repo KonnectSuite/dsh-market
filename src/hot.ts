@@ -23,7 +23,7 @@ import { pathToFileURL } from 'node:url'
 import { asChannel, type Channel } from './channels.ts'
 import { asRegion, normalizeGithubProxy, type Region } from './regions.ts'
 import { logEvent } from './log.ts'
-import { declaredBundlePatchFile, entryArtifactExists } from './profile.ts'
+import { declaredBundlePatchFiles, entryArtifactExists } from './profile.ts'
 
 interface HotRow {
   id: string
@@ -672,19 +672,22 @@ export async function hotMount(ctx: HotContext, profileDir: string, packageName:
     // patch … nothing to hot-mount" for a package that plainly has one
     // (#646). The root file stays as the fallback: it is the long-standing
     // convention, and `profile.ts` resolves the declared field for everything
-    // else, so the two now agree on where a patch is.
+    // else, so the two now agree on where a patch is. #792: the declaration
+    // may also be a LIST of files, which the host composes in order — read
+    // every declared one and parse the concatenation; a file that cannot be
+    // read contributes nothing instead of sinking the rest.
     const packageRoot = join(profileDir, 'node_modules', packageName)
-    const declared = declaredBundlePatchFile(packageRoot)
-    let patchText: string | null = null
-    for (const file of declared !== null ? [declared] : [join(packageRoot, 'cordis.patch.yml')]) {
+    const declared = declaredBundlePatchFiles(packageRoot)
+    const sources = declared.length > 0 ? declared : [join(packageRoot, 'cordis.patch.yml')]
+    const texts: string[] = []
+    for (const file of sources) {
       try {
-        patchText = readFileSync(file, 'utf8')
-        break
+        texts.push(readFileSync(file, 'utf8'))
       } catch { /* try the next location */ }
     }
     let rows: HotRow[] | null
-    if (patchText !== null) {
-      rows = parseSimplePatch(patchText)
+    if (texts.length > 0) {
+      rows = parseSimplePatch(texts.join('\n'))
       if (rows === null) {
         return {
           ok: false,

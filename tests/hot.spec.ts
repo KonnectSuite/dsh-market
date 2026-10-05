@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { hotMount, hotUnmount, listHotMounts, mountClientOnlyDeps, parseSimplePatch, resolveProfileEntry } from '../src/hot.ts'
@@ -91,6 +91,83 @@ describe('hotMount finds a patch the package declares in a subdirectory (#646)',
       expect(result.ok).toBe(false)
       expect(String(result.reason)).toContain('无 bundle patch')
     } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * #792: the host composes an ARRAY `dsh.bundle.patch` in order, so hotMount
+ * must read EVERY declared file, not just a string — an array declaration
+ * used to read as "no patch at all" and the user was told there was nothing
+ * to hot-mount for a package that plainly has patches.
+ */
+describe('hotMount reads every declared patch file (#792)', () => {
+  function target(dir: string, name: string): void {
+    const pkg = join(dir, 'node_modules', name)
+    mkdirSync(pkg, { recursive: true })
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, main: 'index.js' }))
+    writeFileSync(join(pkg, 'index.js'), '')
+  }
+
+  function carrier(dir: string, name: string, patch: unknown, files: Record<string, string>): void {
+    const pkg = join(dir, 'node_modules', name)
+    mkdirSync(pkg, { recursive: true })
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, dsh: { bundle: { patch } } }))
+    for (const [rel, text] of Object.entries(files)) writeFileSync(join(pkg, rel), text)
+  }
+
+  /** The hot input files still on disk, concatenated. */
+  function mountedRows(dir: string): string {
+    try {
+      return readdirSync(join(dir, '.dsh-market'))
+        .filter(file => /^hot-\d+\.yml$/.test(file))
+        .map(file => readFileSync(join(dir, '.dsh-market', file), 'utf8'))
+        .join('')
+    } catch {
+      return ''
+    }
+  }
+
+  it('mounts rows from every file of an array declaration, in order', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dshm-hot-'))
+    try {
+      target(dir, 'dep-a')
+      target(dir, 'dep-b')
+      carrier(dir, 'array-carrier', ['./a.patch.yml', './b.patch.yml'], {
+        'a.patch.yml': '- insert:\n    - id: arr-a\n      name: dep-a\n',
+        'b.patch.yml': '- insert:\n    - id: arr-b\n      name: dep-b\n',
+      })
+
+      const result = await hotMount(ctx, dir, 'array-carrier')
+      expect(result.ok).toBe(true)
+      // Both files contributed, in declaration order, into ONE input file.
+      const rows = readdirSync(join(dir, '.dsh-market'))
+        .filter(file => /^hot-\d+\.yml$/.test(file))
+        .map(file => readFileSync(join(dir, '.dsh-market', file), 'utf8'))
+        .find(text => text.includes('mkt-arr-a'))
+      expect(rows).toBeDefined()
+      expect(rows!.indexOf('mkt-arr-b')).toBeGreaterThan(rows!.indexOf('mkt-arr-a'))
+    } finally {
+      for (const name of listHotMounts()) await hotUnmount(name)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('still mounts a carrier whose second declared file is missing', async () => {
+    // One unreadable file must not sink the readable one.
+    const dir = mkdtempSync(join(tmpdir(), 'dshm-hot-'))
+    try {
+      target(dir, 'dep-b')
+      carrier(dir, 'partial-carrier', ['./gone.patch.yml', './b.patch.yml'], {
+        'b.patch.yml': '- insert:\n    - id: arr-b\n      name: dep-b\n',
+      })
+
+      const result = await hotMount(ctx, dir, 'partial-carrier')
+      expect(result.ok).toBe(true)
+      expect(mountedRows(dir)).toContain('mkt-arr-b')
+    } finally {
+      for (const name of listHotMounts()) await hotUnmount(name)
       rmSync(dir, { recursive: true, force: true })
     }
   })

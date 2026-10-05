@@ -204,6 +204,27 @@ describe('carrier bundles (#103)', () => {
   })
 })
 
+/**
+ * #792: the host accepts `dsh.bundle.patch` as a LIST of files and composes
+ * them in order (official dsh-web-app ships five). The market read only a
+ * string, so an array-declared pure carrier produced no patch rows, no mount
+ * targets, no loadable entry — and verifyActivation called a healthy install
+ * broken.
+ */
+describe('an array-declared pure-patch carrier (#792)', () => {
+  it('reads as restart, not broken, when its two declared patches mount installed packages', () => {
+    profile(['dsh-array-carrier'])
+    pkg('dsh-array-carrier', { dsh: { bundle: { patch: ['./a.patch.yml', './b.patch.yml'] } } }, {
+      'a.patch.yml': '- insert:\n    - id: arr-a\n      name: dep-a\n',
+      'b.patch.yml': '- insert:\n    - id: arr-b\n      name: dep-b\n',
+    })
+    pkg('dep-a', { name: 'dep-a' }, { 'index.js': '' })
+    pkg('dep-b', { name: 'dep-b' }, { 'index.js': '' })
+    expect(verifyActivation('web', 'dsh-array-carrier', new Set()))
+      .toMatchObject({ state: 'restart', bundle: true, hot: false })
+  })
+})
+
 describe('loader inventory beats manifest inference (#135)', () => {
   it('a live package with no dsh field is live, not broken', () => {
     // @deepseek-ai/dsh-tools is loaded by the official dsh-base patch and
