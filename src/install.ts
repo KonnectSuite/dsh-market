@@ -218,6 +218,10 @@ export async function withHoistRecovery(
       // SAME argv succeeds — no option is needed, which also means this works
       // on the desktop bridge that refuses market options (#732).
       //
+      // Covers both lockfiles pnpm writes through the same no-retry atomic
+      // rename: the profile's `pnpm-lock.yaml` and the one inside
+      // `node_modules/.pnpm/lock.yaml`.
+      //
       // Retried here rather than in the route because `pnpmBlockedByOpenFiles`
       // and the route's rollback both read the FINAL result: leaving this
       // unretried made the route treat a transient lock as "the running host

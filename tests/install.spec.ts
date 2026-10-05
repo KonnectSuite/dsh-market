@@ -469,6 +469,36 @@ describe('withHoistRecovery', () => {
     expect(result.stderr).toBe('')
   })
 
+  it('retries the same command when the lock was on the inner virtual-store lockfile (#786)', async () => {
+    // `writeLockfiles` writes the profile's `pnpm-lock.yaml` AND the lockfile
+    // inside `node_modules/.pnpm/lock.yaml` through the same write-file-atomic,
+    // inside one `Promise.all` (pnpm 11.7.0, both branches). A momentary holder
+    // on the INNER temp name therefore fails the run exactly like the outer one
+    // — and if it were answered as the package-directory case, the route's
+    // `pnpmBlockedByOpenFiles` would roll the profile's lockfile back over a
+    // node_modules that already holds the new build. Same retry, same argv.
+    const calls: string[][] = []
+    let failFirst = true
+    const run = async (_profile: string, args: string[]): Promise<InstallResult> => {
+      calls.push(args)
+      if (failFirst) {
+        failFirst = false
+        return {
+          exitCode: -4048,
+          timedOut: false,
+          stdout: '',
+          stderr: String.raw`[EPERM] EPERM: operation not permitted, rename 'C:\p\desktop\node_modules\.pnpm\lock.yaml.3015012533' -> 'C:\p\desktop\node_modules\.pnpm\lock.yaml'`,
+          cancelled: false,
+        }
+      }
+      return ok
+    }
+    const result = await withHoistRecovery(run, 'web', ['add', 'dsh-codearts-auth'])
+    expect(result.exitCode).toBe(0)
+    expect(calls).toEqual([['add', 'dsh-codearts-auth'], ['add', 'dsh-codearts-auth']])
+    expect(result.stderr).toBe('')
+  })
+
   it('retries a per-request fetch timeout once with a longer fetchTimeout (#…)', async () => {
     const calls: string[][] = []
     let failFirst = true
