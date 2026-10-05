@@ -151,6 +151,42 @@ export function readProfileManifestSnapshot(profile: string, explicitDir?: strin
   }
 }
 
+/**
+ * Packages a package operation took out of `dsh.profile.bundles` while they are
+ * STILL declared in `dependencies` (#720).
+ *
+ * That combination is the quiet one. A package that is gone from both was
+ * uninstalled; a package in both is composed. A package that is still installed
+ * but no longer in the bundle list stays on disk, stays declared, and simply
+ * stops loading — the only trace is a boot warning about a dangling patch row
+ * (`patch: entry "better-sidebar" not found`), often days later.
+ *
+ * Pure and read-only on purpose. It does not put anything back: the bundle list
+ * is also how the official plugin page switches a package off (#696), so
+ * restoring "what was there before" would undo a deliberate removal. It only
+ * names what changed, so the next occurrence arrives with evidence — which
+ * operation, which package — instead of a user noticing the symptom later.
+ *
+ * Packages the operation itself touched (`except`) are excluded: removing one
+ * from the list is part of what that operation does.
+ */
+export function bundlesDroppedFromProfile(
+  before: ProfileManifestSnapshot,
+  profile: string,
+  explicitDir: string | undefined,
+  except: ReadonlySet<string> = new Set(),
+): string[] {
+  if (!before.profileBundles.present) return []
+  const now = readProfileManifestSnapshot(profile, explicitDir)
+  const stillListed = new Set(now.profileBundles.present ? bundleNames(now.profileBundles.value) : [])
+  return bundleNames(before.profileBundles.value).filter(name =>
+    !stillListed.has(name)
+    && !except.has(name)
+    && !INBOX_BUNDLES.has(name)
+    && now.dependencies[name] !== undefined,
+  )
+}
+
 /** String package names carried by one valid bundle-list value. */
 function bundleNames(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string') : []

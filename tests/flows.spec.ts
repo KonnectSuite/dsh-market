@@ -39,6 +39,12 @@ const fake = vi.hoisted(() => ({
    * set; `github:` targets are unaffected, as they are on those versions.
    */
   tarballWithoutIntegrity: false,
+  /**
+   * After the next successful npm add, remove this package from
+   * `dsh.profile.bundles` while leaving it in `dependencies` — the host's own
+   * reconcile losing a row (#720). Consumed once.
+   */
+  dropBundleRowAfterAdd: null as string | null,
   /** Answer every http(s) add with this stderr instead (a failure that is NOT the integrity one). */
   tarballFailsWith: '',
   /** Simulate pnpm minimumReleaseAge: adds resolve to the ALREADY INSTALLED version, exit 0. */
@@ -507,6 +513,13 @@ vi.mock('../src/dsh-cli.ts', () => {
     fake.artifactContentsOnNextAdd = null
     writePkg(name, { version, ...(pkg.versions[version].manifest as object) }, pkg.versions[version].artifacts, artifactContents)
     writeNpmLock(name, nextSpec, version)
+    if (fake.dropBundleRowAfterAdd !== null) {
+      const manifest = readManifest()
+      const bundles = manifest.dsh?.profile?.bundles ?? []
+      manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: bundles.filter(row => row !== fake.dropBundleRowAfterAdd) } }
+      writeFileSync(join(fake.profileDir, 'package.json'), JSON.stringify(manifest))
+      fake.dropBundleRowAfterAdd = null
+    }
     if (fake.preserveManifestOnNextAdd) {
       fake.preserveManifestOnNextAdd = false
       if (previousSpec !== undefined) writeDep(name, previousSpec)
@@ -845,6 +858,7 @@ beforeEach(() => {
   fake.repos = {}
   fake.tarballs = {}
   fake.tarballWithoutIntegrity = false
+  fake.dropBundleRowAfterAdd = null
   fake.tarballFailsWith = ''
   fake.staleUpdates = false
   fake.releaseHold = null
@@ -2053,6 +2067,44 @@ describe('update flow — no npm publishing required', () => {
       return Promise.reject(new Error(`unexpected fetch: ${String(url)}`))
     })
   }
+
+  it('names a bundle row that vanished from a package the update was not about (#720)', async () => {
+    // The report: after an update the profile still declared a manually
+    // installed plugin and still had it on disk, but its row was gone from
+    // dsh.profile.bundles — so it stopped loading, with only a dangling-patch
+    // warning at the next boot. The market writes that list from the current
+    // list only; this is the quiet loss it could not previously see.
+    const other = join(fake.profileDir, 'node_modules', 'dsh-manual')
+    mkdirSync(other, { recursive: true })
+    writeFileSync(join(other, 'package.json'), JSON.stringify({ name: 'dsh-manual', version: '0.21.1', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+    const manifest = readManifestAt(fake.profileDir)
+    writeFileSync(join(fake.profileDir, 'package.json'), JSON.stringify({
+      ...manifest,
+      dependencies: { ...manifest.dependencies, 'dsh-manual': '^0.21.1' },
+      dsh: { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: [...(manifest.dsh?.profile?.bundles ?? []), 'dsh-manual'] } },
+    }))
+    advanceNpmLatest('1.2.0')
+    fake.dropBundleRowAfterAdd = 'dsh-manual'
+
+    const r = await bed.dispatch('POST', '/dsh-market/update', { name: 'dsh-loop' })
+
+    expect(r.json.droppedBundles).toEqual(['dsh-manual'])
+    const logs = await bed.dispatch('GET', '/dsh-market/logs')
+    expect(logs.text).toContain('update-bundles-dropped')
+    expect(logs.text).toContain('dsh-manual')
+    // Read-only: it reported the loss and did NOT write the row back.
+    expect(readManifestAt(fake.profileDir).dsh?.profile?.bundles ?? []).not.toContain('dsh-manual')
+  })
+
+  it('says nothing about bundles on an ordinary update (#720)', async () => {
+    advanceNpmLatest('1.2.0')
+    const r = await bed.dispatch('POST', '/dsh-market/update', { name: 'dsh-loop' })
+    expect(r.json.droppedBundles).toBeUndefined()
+    // The log buffer outlives a test, so this checks what THIS operation wrote,
+    // not what an earlier case left in the shared buffer.
+    const after = (await bed.dispatch('GET', '/dsh-market/logs')).text
+    expect(after.slice(after.lastIndexOf(' update dsh-loop'))).not.toContain('update-bundles-dropped')
+  })
 
   it('refuses a plain dependency before touching anything, instead of running pnpm and rolling back (#793)', async () => {
     // A direct dependency that is only a CLI: no dsh field, not a bundle, no

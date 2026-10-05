@@ -30,7 +30,7 @@ import {
   type PluginCommandRuntime,
 } from './dsh-cli.ts'
 import { packageOfEntryName } from './entry-identity.ts'
-import { addProfileBundle, bundlePatchInsertedIds, declareProfileDependency, dropFromManifest, hasLoadableEntry, holdsNativeAddon, INBOX_BUNDLES, isDshProfileName, profileDir, readDependencyOwners, readGitResolutionCommit, readInstalled, readInstalledManifest, readInstalledPackageName, readInstalledRepoEvidence, readInstalledVersion, readLockCommits, readProfileBundles, readProfileManifestSnapshot, removeProfileBundle, restoreProfileManifest, setAllowBuilds, type ProfileManifestSnapshot } from './profile.ts'
+import { addProfileBundle, bundlePatchInsertedIds, bundlesDroppedFromProfile, declareProfileDependency, dropFromManifest, hasLoadableEntry, holdsNativeAddon, INBOX_BUNDLES, isDshProfileName, profileDir, readDependencyOwners, readGitResolutionCommit, readInstalled, readInstalledManifest, readInstalledPackageName, readInstalledRepoEvidence, readInstalledVersion, readLockCommits, readProfileBundles, readProfileManifestSnapshot, removeProfileBundle, restoreProfileManifest, setAllowBuilds, type ProfileManifestSnapshot } from './profile.ts'
 import { assessProfile, classifyPeer, introducedDuplicateNames, introducedRisks, type CompatibilityRisk } from './compatibility.ts'
 import { runningAgentIds, type AgentsLookup } from './agents.ts'
 import { analyzeProfile, corePackageNames, type DuplicateName } from './check.ts'
@@ -4680,6 +4680,21 @@ sendJson(response, 200, { updates })
             // approve-and-retry banner the install flow has had since #6.
             const ignoredBuilds = ok || cancelled ? undefined : blockedBuilds(result)
             if (ok) clearBrokenPlugin(name)
+            // A package still installed but no longer in dsh.profile.bundles
+            // after this run stops loading and says nothing (#720). The market
+            // does not write that list from anything but the current list, so
+            // this is the host's reconcile or something outside — and either way
+            // it has left no trace until now. Name it, once, with the operation
+            // that was running when it happened. Read-only: the list is also how
+            // the official plugin page switches a package off (#696), so putting
+            // rows back would undo a deliberate removal.
+            const droppedBundles = bundlesDroppedFromProfile(
+              manifestBefore, config.profile, activeProfileDir, new Set([name, ...(removedDeclaration === null ? [] : [removedDeclaration.name])]),
+            )
+            if (droppedBundles.length > 0) {
+              logEvent('warn', 'update-bundles-dropped',
+                `${name}: after this update ${droppedBundles.join(', ')} ${droppedBundles.length === 1 ? 'is' : 'are'} still declared in dependencies but no longer in dsh.profile.bundles, so ${droppedBundles.length === 1 ? 'it' : 'they'} will not load — the market did not write that change (#720)`)
+            }
             logEvent(ok || cancelled ? 'info' : 'error', 'update',
               `${name} -> ${target} exit=${String(result.exitCode)}${result.timedOut ? ' TIMEOUT' : ''}${cancelled ? ' CANCELLED' : ''}${stale ? ` STALE(${staleReason ?? 'unknown'})` : ''}${ok || cancelled ? '' : ` err=${failureDetail(result)}`}`)
             // A user-cancelled run is a quiet outcome, not an error.
@@ -4701,6 +4716,7 @@ sendJson(response, 200, { updates })
               failureCode: versionFailureCode ?? undefined,
               renamedTo: renamedTo ?? undefined,
               removedDeclaration: removedDeclaration ?? undefined,
+              ...(droppedBundles.length > 0 ? { droppedBundles } : {}),
               error: versionFailureError ?? renamedError ?? trialError ?? brokenEntryError ?? hardFailureRollbackError ?? staleError ?? undefined,
               exitCode: result.exitCode,
               timedOut: result.timedOut,

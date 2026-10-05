@@ -9,7 +9,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { resolveDshHome } from '../src/home-paths.ts'
 import {
-  addProfileBundle, bundlePatchInsertedIds, bundlePatchTargets, conflictingEntryIds, declaredBundlePatchFiles, dropFromManifest, entryArtifactExists, hasDshManifest, hasLoadableEntry, holdsNativeAddon, isDshProfileName, mergeDuplicateReleaseAgeExcludes, pluginSubdirs, profileDir,
+  addProfileBundle, bundlePatchInsertedIds, bundlesDroppedFromProfile, readProfileManifestSnapshot, bundlePatchTargets, conflictingEntryIds, declaredBundlePatchFiles, dropFromManifest, entryArtifactExists, hasDshManifest, hasLoadableEntry, holdsNativeAddon, isDshProfileName, mergeDuplicateReleaseAgeExcludes, pluginSubdirs, profileDir,
   readDependencyOwners, readGitResolutionCommit, readInstalled, readInstalledManifest, readInstalledRepoEvidence, readInstalledRepoIdentities, readInstalledVersion, readLockCommits,
   removeProfileBundle,
 } from '../src/profile.ts'
@@ -1178,5 +1178,65 @@ describe('mergeDuplicateReleaseAgeExcludes (#732)', () => {
     const dir = workspace('minimumReleaseAgeExclude:\n  - pkg\n  - pkg@1.0.0\n')
     expect(mergeDuplicateReleaseAgeExcludes('web')).toEqual(['pkg'])
     expect(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8')).toBe('minimumReleaseAgeExclude:\n  - pkg\n')
+  })
+})
+
+describe('bundlesDroppedFromProfile (#720)', () => {
+  /**
+   * The report: after a market update the profile still DECLARED
+   * `dsh-better-sidebar` and still had it on disk, but its row was gone from
+   * `dsh.profile.bundles`, so the plugin stopped loading with nothing but a
+   * dangling-patch warning at the next boot. The combination — still a
+   * dependency, no longer a bundle — is the quiet one, and it is what this
+   * names.
+   */
+  const manifest = (bundles: string[] | undefined, dependencies: Record<string, string>) => ({
+    name: 'web-profile',
+    ...(bundles === undefined ? {} : { dsh: { profile: { bundles } } }),
+    dependencies,
+  })
+
+  it('names a package that is still a dependency but left the bundle list', () => {
+    writeProfile(manifest(['@deepseek-ai/dsh-base', 'dshmarket', 'dsh-better-sidebar'], { dshmarket: '^1', 'dsh-better-sidebar': '^0.21.1' }))
+    const before = readProfileManifestSnapshot('web')
+    writeProfile(manifest(['@deepseek-ai/dsh-base', 'dshmarket'], { dshmarket: '^1', 'dsh-better-sidebar': '^0.21.1' }))
+    expect(bundlesDroppedFromProfile(before, 'web', undefined)).toEqual(['dsh-better-sidebar'])
+  })
+
+  it('does not name a package that was uninstalled — gone from both is what an uninstall is', () => {
+    writeProfile(manifest(['dshmarket', 'dsh-gone'], { dshmarket: '^1', 'dsh-gone': '^1' }))
+    const before = readProfileManifestSnapshot('web')
+    writeProfile(manifest(['dshmarket'], { dshmarket: '^1' }))
+    expect(bundlesDroppedFromProfile(before, 'web', undefined)).toEqual([])
+  })
+
+  it('does not name the package the operation itself was about', () => {
+    writeProfile(manifest(['dshmarket', 'dsh-target'], { dshmarket: '^1', 'dsh-target': '^1' }))
+    const before = readProfileManifestSnapshot('web')
+    writeProfile(manifest(['dshmarket'], { dshmarket: '^1', 'dsh-target': '^1' }))
+    expect(bundlesDroppedFromProfile(before, 'web', undefined, new Set(['dsh-target']))).toEqual([])
+  })
+
+  it('says nothing when the list is unchanged, grew, or the profile had none', () => {
+    writeProfile(manifest(['dshmarket'], { dshmarket: '^1', 'dsh-new': '^1' }))
+    const before = readProfileManifestSnapshot('web')
+    writeProfile(manifest(['dshmarket', 'dsh-new'], { dshmarket: '^1', 'dsh-new': '^1' }))
+    expect(bundlesDroppedFromProfile(before, 'web', undefined)).toEqual([])
+
+    writeProfile(manifest(undefined, { dshmarket: '^1' }))
+    const without = readProfileManifestSnapshot('web')
+    writeProfile(manifest(['dshmarket'], { dshmarket: '^1' }))
+    expect(bundlesDroppedFromProfile(without, 'web', undefined)).toEqual([])
+  })
+
+  it('is read-only: it reports a drop and never puts the row back', () => {
+    // The bundle list is also how the official plugin page switches a package
+    // off (#696). Restoring "what was there before" would undo a deliberate
+    // removal, so this only names the change.
+    writeProfile(manifest(['dshmarket', 'dsh-off'], { dshmarket: '^1', 'dsh-off': '^1' }))
+    const before = readProfileManifestSnapshot('web')
+    const dir = writeProfile(manifest(['dshmarket'], { dshmarket: '^1', 'dsh-off': '^1' }))
+    bundlesDroppedFromProfile(before, 'web', undefined)
+    expect(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dsh.profile.bundles).toEqual(['dshmarket'])
   })
 })
