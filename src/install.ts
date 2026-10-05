@@ -213,8 +213,20 @@ export async function withHoistRecovery(
         logEvent('warn', 'install', `${failure.pkg ?? 'a host package'} is a peer the runtime provides and npm does not carry (#289) — retrying once with ${AUTO_INSTALL_PEERS_OFF}`)
         result = await run(profile, [pluginArgs[0], AUTO_INSTALL_PEERS_OFF, ...pluginArgs.slice(1)])
       }
-    } else if (
-      failure?.code === 'transient-network'
+    } else if (failure?.code === 'profile-file-locked') {
+      // #786 follow-up: the profile's own file was momentarily held, so the
+      // SAME argv succeeds — no option is needed, which also means this works
+      // on the desktop bridge that refuses market options (#732).
+      //
+      // Retried here rather than in the route because `pnpmBlockedByOpenFiles`
+      // and the route's rollback both read the FINAL result: leaving this
+      // unretried made the route treat a transient lock as "the running host
+      // holds the plugin's files open", restore package.json and pnpm-lock.yaml
+      // — and thereby throw away a lockfile that already pointed at the newly
+      // built commit, which is what left the profile desynchronized.
+      logEvent('warn', 'install', `pnpm was momentarily refused on a profile file (antivirus or indexer) — retrying the same command once (#786)`)
+      result = await run(profile, pluginArgs)
+    } else if (failure?.code === 'transient-network'
       && (pluginArgs[0] === 'add' || pluginArgs[0] === 'remove')
     ) {
       // #83: pnpm replays the whole tree, so any existing dependency's

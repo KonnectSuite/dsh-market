@@ -433,6 +433,42 @@ describe('allowBuilds keys a pnpm cannot parse (#698)', () => {
 })
 
 describe('withHoistRecovery', () => {
+  it('retries the SAME command when Windows briefly locked a profile file (#786)', async () => {
+    // The reporter's real sequence: pnpm had already built and linked the new
+    // commit, then a momentary holder (Defender, the indexer) refused the
+    // rename of pnpm-lock.yaml. Leaving this unretried made the update route
+    // treat it as "the running host holds the plugin's files open", restore
+    // package.json and pnpm-lock.yaml, and thereby throw away a lockfile that
+    // already named the new commit — which is what desynchronized the profile.
+    const calls: string[][] = []
+    let failFirst = true
+    const run = async (_profile: string, args: string[]): Promise<InstallResult> => {
+      calls.push(args)
+      if (failFirst) {
+        failFirst = false
+        return {
+          exitCode: -4048,
+          timedOut: false,
+          stdout: '',
+          stderr: String.raw`[EPERM] EPERM: operation not permitted, rename '~\pnpm-lock.yaml.3015012533' -> '~\pnpm-lock.yaml'`,
+          cancelled: false,
+        }
+      }
+      return ok
+    }
+    const result = await withHoistRecovery(run, 'web', ['add', 'git+https://gitee.com/iJetLi/deepseek-harness-codearts.git'])
+    expect(result.exitCode).toBe(0)
+    // No option is added: this host accepts none, and none is needed — which is
+    // exactly why the retry is the same argv (#732).
+    expect(calls).toEqual([
+      ['add', 'git+https://gitee.com/iJetLi/deepseek-harness-codearts.git'],
+      ['add', 'git+https://gitee.com/iJetLi/deepseek-harness-codearts.git'],
+    ])
+    // And it is not reported as a locked plugin: the final result is a success,
+    // so the route's open-file rollback never runs.
+    expect(result.stderr).toBe('')
+  })
+
   it('retries a per-request fetch timeout once with a longer fetchTimeout (#…)', async () => {
     const calls: string[][] = []
     let failFirst = true
