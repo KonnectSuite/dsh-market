@@ -236,6 +236,45 @@ export function restoreProfileManifest(
 }
 
 /**
+ * Declare one dependency at an exact value, leaving every other manifest field
+ * alone.
+ *
+ * Needed for the duration of a package operation that has to be identifiable
+ * afterwards. DSH's desktop plugin manager names the package a run installed by
+ * diffing the manifest before and after pnpm; an operation whose specifier is
+ * byte-identical before and after leaves that diff empty, and its fallback only
+ * recognises a `name@…` spec — so a floating git re-resolve, which is sent as
+ * the bare remote URL, matches neither and fails as `ambiguous-install` after
+ * pnpm has already re-resolved and built the new commit.
+ *
+ * Declaring the package at the commit already on disk gives the diff exactly
+ * one entry, and pnpm writes the floating specifier back as it re-resolves, so
+ * the durable declaration is unchanged.
+ *
+ * The write is atomic, because it runs immediately before a package operation
+ * that may itself fail.
+ * @returns true when the declaration was written.
+ */
+export function declareProfileDependency(
+  profile: string,
+  name: string,
+  value: string,
+  explicitDir?: string,
+): boolean {
+  const file = join(profileDir(profile, explicitDir), 'package.json')
+  let manifest: { dependencies?: Record<string, string> }
+  try {
+    manifest = JSON.parse(readFileSync(file, 'utf8')) as typeof manifest
+  } catch {
+    return false
+  }
+  if (manifest.dependencies?.[name] === value) return false
+  manifest.dependencies = { ...manifest.dependencies, [name]: value }
+  writeManifestAtomic(file, manifest)
+  return true
+}
+
+/**
  * Remove a package from BOTH manifest lists — dependencies and
  * dsh.profile.bundles. The uninstall counterpart of restoreProfileManifest:
  * pnpm can fail a remove after deleting node_modules but before saving

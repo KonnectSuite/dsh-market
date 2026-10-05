@@ -30,7 +30,7 @@ import {
   type PluginCommandRuntime,
 } from './dsh-cli.ts'
 import { packageOfEntryName } from './entry-identity.ts'
-import { addProfileBundle, bundlePatchInsertedIds, dropFromManifest, hasLoadableEntry, holdsNativeAddon, INBOX_BUNDLES, isDshProfileName, profileDir, readDependencyOwners, readGitResolutionCommit, readInstalled, readInstalledManifest, readInstalledPackageName, readInstalledRepoEvidence, readInstalledVersion, readLockCommits, readProfileBundles, readProfileManifestSnapshot, removeProfileBundle, restoreProfileManifest, setAllowBuilds, type ProfileManifestSnapshot } from './profile.ts'
+import { addProfileBundle, bundlePatchInsertedIds, declareProfileDependency, dropFromManifest, hasLoadableEntry, holdsNativeAddon, INBOX_BUNDLES, isDshProfileName, profileDir, readDependencyOwners, readGitResolutionCommit, readInstalled, readInstalledManifest, readInstalledPackageName, readInstalledRepoEvidence, readInstalledVersion, readLockCommits, readProfileBundles, readProfileManifestSnapshot, removeProfileBundle, restoreProfileManifest, setAllowBuilds, type ProfileManifestSnapshot } from './profile.ts'
 import { assessProfile, classifyPeer, introducedDuplicateNames, introducedRisks, type CompatibilityRisk } from './compatibility.ts'
 import { runningAgentIds, type AgentsLookup } from './agents.ts'
 import { analyzeProfile, corePackageNames, type DuplicateName } from './check.ts'
@@ -1129,6 +1129,27 @@ export function mountMarketRoutes(
     return key === null
       ? null
       : readLockCommits(config.profile, activeProfileDir).get(key) ?? null
+  }
+
+  /**
+   * `spec` pinned to `commit`, keeping any selector it already carries.
+   *
+   * Deliberately not `gitTargetAtCommit`: that one produces a target the HOST
+   * has to accept, so it refuses the `&` that carries a `path:` selector beside
+   * a commit (dsh-cli's target grammar). This value never leaves the profile —
+   * the host still receives the bare floating spec — so the selector can be
+   * preserved here. Measured on pnpm 11.7.0 and 12.4.1: `#<sha>&path:/sub`
+   * resolves to exactly that commit and pnpm writes the floating specifier
+   * back.
+   * @returns the pinned spelling, or the spec itself when it already carries
+   *   exactly this commit.
+   */
+  function pinSpecToCommit(spec: string, commit: string): string {
+    const hash = spec.indexOf('#')
+    if (hash === -1) return `${spec}#${commit}`
+    // Drop a previous commit, keep every other fragment (`path:`, `semver:`).
+    const rest = spec.slice(hash + 1).split('&').filter(part => part !== '' && !/^[0-9a-f]{40}$/i.test(part))
+    return `${spec.slice(0, hash)}#${[commit, ...rest].join('&')}`
   }
 
   function exactGitRollbackTarget(target: string, beforeCommit: string): string | null {
@@ -4182,8 +4203,50 @@ sendJson(response, 200, { updates })
                           detail: `更新前的来源 ${spec} 不是受支持的精确回滚目标（${previousVersionZh}），因此自动回滚不可用；需要时请从可信来源手工重新安装先前版本。 / The previous source ${spec} is not a supported exact rollback target (${previousVersionEn}), so automatic rollback is unavailable. Reinstall the prior version manually from a trusted source if needed.`,
                           lockfileBefore: lockfileCapture.snapshot,
                         }
+            // The desktop host names the package a run installed by diffing the
+            // profile manifest before and after pnpm. A floating re-resolve is
+            // sent as the bare remote URL, which pnpm writes back byte-for-byte
+            // — so that diff is empty, and the manager's fallback only
+            // recognises a `name@…` spec, which a bare URL is not. Both reads
+            // therefore come back empty and the run fails as
+            // `ambiguous-install` AFTER pnpm has already re-resolved and built
+            // the new commit (#786 follow-up).
+            //
+            // Declaring the package at the commit already on disk for the
+            // duration of the run gives that diff exactly one entry. pnpm
+            // rewrites the floating specifier as it re-resolves, so the durable
+            // declaration is unchanged; a failed run restores the manifest from
+            // the snapshot above.
+            //
+            // A `#path:` spec needs the local pin instead of the host's exact
+            // rollback target: `gitTargetAtCommit` refuses the `&` that carries
+            // a selector beside a commit, because dsh-cli's target grammar has
+            // no room for it — but this value is never sent to the host, which
+            // still receives the bare floating spec. Measured on pnpm 11.7.0 and
+            // 12.4.1, `#<sha>&path:/sub` resolves to exactly that commit.
+            const pinValue = gitRollbackTarget ?? (hasGitSubpath && beforeCommit !== null
+              ? pinSpecToCommit(spec, beforeCommit)
+              : null)
+            const pinnedForIdentification = reresolveInPlace && !inPlaceUpdate
+              && pinValue !== null && pinValue !== spec
+            if (pinnedForIdentification) {
+              declareProfileDependency(config.profile, name, pinValue, activeProfileDir)
+            }
             const result = await runPlugin(config.profile, addArgs)
             const cancelled = result.cancelled
+            // The pin above is the market's own write, so it is undone whenever
+            // pnpm did not replace it. Measured on pnpm 11.7.0 and 12.4.1, a
+            // bare `add` of a floating git URL rewrites the manifest back to
+            // the floating specifier as it re-resolves, which makes this a
+            // no-op on every normal run. It is the safety net for the runs that
+            // do not: a declaration left pinned to the old commit would
+            // silently freeze a plugin the user believes is floating. Only that
+            // one dependency is touched, so a bundle row the run legitimately
+            // added is left alone.
+            if (pinnedForIdentification
+              && readProfileManifestSnapshot(config.profile, activeProfileDir).dependencies[name] === pinValue) {
+              declareProfileDependency(config.profile, name, spec, activeProfileDir)
+            }
             const rollbackAttemptBuild = async (): Promise<{ ok: boolean; detail: string | null }> => {
               if (rollbackPlan.available) {
                 return executeUpdateRollback(name, manifestBefore, rollbackPlan.source)

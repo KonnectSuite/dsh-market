@@ -177,11 +177,16 @@ vi.mock('../src/dsh-cli.ts', () => {
       : `${existing === '' ? 'lockfileVersion: 9\n' : existing}  resolution: {gitHosted: true, tarball: ${url}}\n`)
   }
   // pnpm records a non-codeload git install as `resolution: {commit, repo, type: git}`.
-  function writeGitLockCommit(repo: string, commit: string): void {
+  // A subpath install additionally carries `path:`, and pnpm writes it between
+  // the commit and the repo (measured on 11.7.0 and 12.4.1) — the identity
+  // reads match on it, so the fake has to write it or a monorepo subpath
+  // install cannot be identified at all.
+  function writeGitLockCommit(repo: string, commit: string, subpath?: string): void {
     const path = join(fake.profileDir, 'pnpm-lock.yaml')
     const existing = existsSync(path) ? readFileSync(path, 'utf8') : ''
-    const line = `  resolution: {commit: ${commit}, repo: ${repo}, type: git}`
-    const own = new RegExp(`  resolution: \\{commit: [0-9a-f]{40}, repo: ${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, type: git\\}`)
+    const selector = subpath === undefined ? '' : `path: ${subpath}, `
+    const line = `  resolution: {commit: ${commit}, ${selector}repo: ${repo}, type: git}`
+    const own = new RegExp(`  resolution: \\{commit: [0-9a-f]{40}, (?:path: [^,]+, )?repo: ${repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, type: git\\}`)
     writeFileSync(path, own.test(existing)
       ? existing.replace(own, line)
       : `${existing === '' ? 'lockfileVersion: 9\n' : existing}${line}\n`)
@@ -402,7 +407,14 @@ vi.mock('../src/dsh-cli.ts', () => {
         // reads whichever the host wrote.
         const github = /github\.com[/:]([^/\s]+\/[^/\s]+?)(?:\.git)?$/.exec(bare.replace(/^git\+/i, ''))
         if (github !== null) writeLockCommit(github[1]!, nextCommit)
-        else writeGitLockCommit(bare.replace(/^git\+/i, ''), nextCommit)
+        else {
+          const selector = /(?:^|&)path:([^&]*)/.exec(frag)?.[1]
+          writeGitLockCommit(
+            bare.replace(/^git\+/i, ''),
+            nextCommit,
+            selector === undefined || selector === '' ? undefined : selector,
+          )
+        }
       }
       if (fake.profileBundleOnNextAdd !== null) {
         appendProfileBundle(fake.profileBundleOnNextAdd)
@@ -2741,6 +2753,172 @@ describe('update flow — no npm publishing required', () => {
     expect(installedSpec('themer')).toBe(gitea)
     const ran = fake.calls.map(call => call.join(' ')).join('\n')
     expect(ran).not.toContain('themer@latest')
+  })
+
+  it('makes a floating git re-resolve identifiable to the desktop manager (#786)', async () => {
+    // The bridge above takes `add <spec>`, but the host's in-process manager
+    // then has to work out WHICH package that run installed, and it does so by
+    // diffing the profile manifest before and after pnpm:
+    //
+    //   const installed = Object.keys(after).filter(n => before[n] !== after[n])
+    //   if (installed.length === 0) installed.push(...Object.keys(after).filter(
+    //     n => spec === n || spec.startsWith(`${n}@`)))
+    //   if (installed.length !== 1 || target === undefined) throw
+    //     new ManagementFailure('ambiguous-install')
+    //
+    // A floating git re-resolve is sent as the BARE remote URL, which pnpm
+    // writes back byte-for-byte — so the diff is empty — and the fallback only
+    // recognises a `name@…` spec, which a bare URL is not. Both reads came back
+    // empty and the run failed as `ambiguous-install` AFTER pnpm had already
+    // re-resolved and built the new commit. Measured on pnpm 11.7.0 and 12.4.1
+    // against the real profile: declaring the package at the commit already on
+    // disk for the duration of the run makes that diff exactly one entry, and
+    // pnpm rewrites the floating specifier back as it re-resolves.
+    const gitea = 'git+https://gitea.example.com/me/themer.git'
+    const OLD = 'a'.repeat(40)
+    const NEW = 'b'.repeat(40)
+    fake.repos[gitea] = {
+      name: 'themer',
+      manifest: { name: 'themer', version: '2.0.0', dsh: {}, main: 'index.js' },
+      artifacts: ['index.js'],
+      lockCommit: NEW,
+      byCommit: {
+        [OLD]: { manifest: { name: 'themer', version: '1.0.0', dsh: {}, main: 'index.js' }, artifacts: ['index.js'] },
+      },
+    }
+    const manifestPath = join(profileDir('web'), 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.dependencies = { ...(manifest.dependencies ?? {}), themer: gitea }
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    mkdirSync(join(profileDir('web'), 'node_modules', 'themer'), { recursive: true })
+    writeFileSync(
+      join(profileDir('web'), 'node_modules', 'themer', 'package.json'),
+      JSON.stringify({ name: 'themer', version: '1.0.0', dsh: {}, main: 'index.js' }),
+    )
+    writeFileSync(join(profileDir('web'), 'node_modules', 'themer', 'index.js'), 'export {}\n')
+    writeFileSync(
+      join(profileDir('web'), 'pnpm-lock.yaml'),
+      `lockfileVersion: 9\n  resolution: {commit: ${OLD}, repo: https://gitea.example.com/me/themer.git, type: git}\n`,
+    )
+
+    // The manager's own identification, replayed over the real profile files.
+    // The stub is deliberately strict: it throws the shipped error rather than
+    // reporting success, so a run the real host would refuse cannot pass here.
+    const manager = {
+      installBundle: async (spec: string) => {
+        const before = JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}
+        const ran = await runDshPlugin('desktop', ['add', spec]) as { exitCode: number; stdout: string; stderr: string }
+        if (ran.exitCode !== 0) {
+          return { application: 'failed', error: ran.stderr, packageResult: { exitCode: ran.exitCode, output: ran.stdout } }
+        }
+        const after = JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}
+        const installed = Object.keys(after).filter(name => before[name] !== after[name])
+        if (installed.length === 0) {
+          installed.push(...Object.keys(after).filter(name => spec === name || spec.startsWith(`${name}@`)))
+        }
+        if (installed.length !== 1 || installed[0] === undefined) {
+          return { application: 'failed', error: 'ambiguous-install', packageResult: { exitCode: 1, output: '' } }
+        }
+        return { application: 'restart-required', packageResult: { exitCode: 0, output: '' } }
+      },
+      removeBundle: async (name: string) => {
+        const ran = await runDshPlugin('desktop', ['remove', name]) as { exitCode: number }
+        return { application: ran.exitCode === 0 ? 'applied' : 'failed', packageResult: { exitCode: ran.exitCode, output: '' } }
+      },
+      cancelInstall: async () => ({ status: 'cancelled' }),
+    }
+    bed.dispose()
+    bed = createTestbed({}, createOfficialDesktopRuntime(() => manager, 'web', profileDir('web')))
+
+    fake.calls = []
+    const updated = await bed.dispatch('POST', '/dsh-market/update', { name: 'themer' })
+
+    expect(updated.status, 'the update must not fail as ambiguous-install').toBe(200)
+    expect(fake.calls.at(-1)?.[0]).toBe('add')
+    // The declaration is back to the floating specifier the user had: the pin
+    // exists only for the duration of the run.
+    expect(installedSpec('themer')).toBe(gitea)
+    // And the new commit is what landed.
+    expect(readFileSync(join(profileDir('web'), 'pnpm-lock.yaml'), 'utf8')).toContain(NEW)
+  })
+
+  it('makes a floating git re-resolve identifiable when the spec carries a subpath (#786)', async () => {
+    // The same identification problem as the test above, for a monorepo
+    // subpath plugin. This shape needs its own pin: `gitTargetAtCommit`
+    // refuses the `&` that carries a `path:` selector beside a commit, because
+    // dsh-cli's target grammar has no room for it — but the pinned value never
+    // leaves the profile, so the selector can be preserved there. Measured on
+    // pnpm 11.7.0 and 12.4.1, `#<sha>&path:/sub` resolves to exactly that
+    // commit and pnpm writes the floating specifier back.
+    const gitea = 'git+https://gitea.example.com/me/mono.git'
+    const OLD = 'a'.repeat(40)
+    const NEW = 'b'.repeat(40)
+    const floating = `${gitea}#path:/packages/themer`
+    fake.repos[floating] = {
+      name: 'themer',
+      manifest: { name: 'themer', version: '2.0.0', dsh: {}, main: 'index.js' },
+      artifacts: ['index.js'],
+      lockCommit: NEW,
+      byCommit: {
+        [OLD]: { manifest: { name: 'themer', version: '1.0.0', dsh: {}, main: 'index.js' }, artifacts: ['index.js'] },
+      },
+    }
+    const manifestPath = join(profileDir('web'), 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.dependencies = { ...(manifest.dependencies ?? {}), themer: floating }
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    mkdirSync(join(profileDir('web'), 'node_modules', 'themer'), { recursive: true })
+    writeFileSync(
+      join(profileDir('web'), 'node_modules', 'themer', 'package.json'),
+      JSON.stringify({ name: 'themer', version: '1.0.0', dsh: {}, main: 'index.js' }),
+    )
+    writeFileSync(join(profileDir('web'), 'node_modules', 'themer', 'index.js'), 'export {}\n')
+    writeFileSync(
+      join(profileDir('web'), 'pnpm-lock.yaml'),
+      // The real shape pnpm writes for a subpath install: the resolution
+      // carries `path:`, and readGitResolutionCommit matches the identity on
+      // it (a monorepo's siblings each have their own commit).
+      `lockfileVersion: 9\n  resolution: {commit: ${OLD}, path: /packages/themer, repo: https://gitea.example.com/me/mono.git, type: git}\n`,
+    )
+
+    const manager = {
+      installBundle: async (spec: string) => {
+        const before = JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}
+        const ran = await runDshPlugin('desktop', ['add', spec]) as { exitCode: number; stdout: string; stderr: string }
+        if (ran.exitCode !== 0) {
+          return { application: 'failed', error: ran.stderr, packageResult: { exitCode: ran.exitCode, output: ran.stdout } }
+        }
+        const after = JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}
+        const installed = Object.keys(after).filter(name => before[name] !== after[name])
+        if (installed.length === 0) {
+          installed.push(...Object.keys(after).filter(name => spec === name || spec.startsWith(`${name}@`)))
+        }
+        if (installed.length !== 1 || installed[0] === undefined) {
+          return { application: 'failed', error: 'ambiguous-install', packageResult: { exitCode: 1, output: '' } }
+        }
+        return { application: 'restart-required', packageResult: { exitCode: 0, output: '' } }
+      },
+      removeBundle: async (name: string) => {
+        const ran = await runDshPlugin('desktop', ['remove', name]) as { exitCode: number }
+        return { application: ran.exitCode === 0 ? 'applied' : 'failed', packageResult: { exitCode: ran.exitCode, output: '' } }
+      },
+      cancelInstall: async () => ({ status: 'cancelled' }),
+    }
+    bed.dispose()
+    bed = createTestbed({}, createOfficialDesktopRuntime(() => manager, 'web', profileDir('web')))
+
+    fake.calls = []
+    const updated = await bed.dispatch('POST', '/dsh-market/update', { name: 'themer' })
+
+    expect(updated.status, 'the subpath update must not fail as ambiguous-install').toBe(200)
+    // The host still receives the BARE floating spec: the pin is a profile
+    // write, never an argument, because the host's target grammar rejects the
+    // `&` a selector needs.
+    expect(fake.calls.at(-1)?.[0]).toBe('add')
+    expect(fake.calls.at(-1)?.[1]).toBe(floating)
+    // The subpath survives and the declaration is floating again.
+    expect(installedSpec('themer')).toBe(floating)
+    expect(readFileSync(join(profileDir('web'), 'pnpm-lock.yaml'), 'utf8')).toContain(NEW)
   })
 
   it('keeps a github subpath while dropping revision selectors during update (#281)', async () => {
