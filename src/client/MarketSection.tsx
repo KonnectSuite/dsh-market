@@ -51,7 +51,7 @@ import { Diagnostics } from './Diagnostics.tsx'
 import { exportMarketLog } from './self-check.ts'
 import {
   api, applyGithubRouting, avatarColor, catalogEntryForInstalled, entryForDep, githubRouteCandidates, groupSwitchState, humanOutput, installedForCatalog, isGenerationSpec, isInstalled, localizeBilingual, localizeBilingualList, looksTerminal, matchInstalledName, orderedCategories, pluginCategories,
-  formatCount, pageItems, pluginName, blockAliases, pluginScreenshotCandidates, pluginScreenshots, pluginsForFavorites, queuedRowApplies, rankThemeScreenshots, readSession, releaseNotesHttpsImage, rememberGithubRoute, resetScreenshotsCache, resolveCatalogRestore, safeScreenshots, sanitizeReleaseNotesBody, staleFavoriteUrls, themePlugins as themePluginsOf, themeSwatch, TIME_RANGE_DAYS, visiblePlugins,
+  formatCount, pageItems, pluginName, blockAliases, pluginScreenshotCandidates, pluginScreenshots, pluginsForFavorites, queuedRowApplies, rankThemeScreenshots, readSession, releaseNotesHttpsImage, rememberGithubRoute, resetScreenshotsCache, resolveCatalogRestore, safeScreenshots, sanitizeReleaseNotesBody, staleFavoriteUrls, themePlugins as themePluginsOf, themeSwatch, TIME_RANGE_DAYS, visiblePlugins, restartHintKey,
 } from './market-data.ts'
 import type {
 ActivationInfo, ActivationState, GistExportResult, InstalledMap, InstalledRepoHints, InstalledRepoIdentities, MarketStatus, Registry, RegistryPlugin,
@@ -2236,6 +2236,9 @@ export function MarketSection(props: MarketSectionProps) {
   const [supervisor, setSupervisor] = useState<string | null>(null)
   /** Debugger latch when one-click restart must not kill the host (#447). */
   const [debuggerLatch, setDebuggerLatch] = useState<string | null>(null)
+  // False when this page reaches dsh through a proxy: a restart from here is refused
+  // every time, so the banner says so instead of offering a button (#782).
+  const [restartReachable, setRestartReachable] = useState(true)
   const [restarting, setRestarting] = useState(false)
   const [showTop, setShowTop] = useState(false)
   const [backupBusy, setBackupBusy] = useState(false)
@@ -2533,6 +2536,9 @@ export function MarketSection(props: MarketSectionProps) {
         setRestartEnabled(status.restart === true)
         setSupervisor(typeof status.supervisor === 'string' ? status.supervisor : null)
         setDebuggerLatch(typeof status.debugger === 'string' ? status.debugger : null)
+        // Only an explicit false takes the button away. Absent (an older host) or
+        // anything else keeps it: never remove an action on a guess.
+        setRestartReachable(status.restartReachable !== false)
         if (typeof status.version === 'string' && status.version !== '') setVersion(status.version)
       })
       .catch(() => {})
@@ -5674,18 +5680,12 @@ export function MarketSection(props: MarketSectionProps) {
             <IconRefreshOutline14 size={14} className={css.bannerIcon} />
             <span className={css.grow}><b>{pendingRestart}</b> {t('restartBanner')}</span>
             <Tooltip
-              label={
-                debuggerLatch !== null
-                  ? t('restartHintDebugged')
-                  : supervisor === null
-                    ? t('restartHint')
-                    : t('restartHintSupervised').replace('{0}', supervisor)
-              }
+              label={t(restartHintKey({ debuggerLatch, restartReachable, supervisor })).replace('{0}', supervisor ?? '')}
               side="bottom"
             >
               <span className={css.bannerHint}><IconQuestionOutline14 size={14} /></span>
             </Tooltip>
-            {restartEnabled && debuggerLatch === null && recovery === null && (
+            {restartEnabled && restartReachable && debuggerLatch === null && recovery === null && (
               <Button
                 variant="primary"
                 size="sm"

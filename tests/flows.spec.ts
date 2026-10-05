@@ -5813,6 +5813,35 @@ describe('one-click restart guards (#14)', () => {
     expect(restartCalls.count).toBe(1)
   })
 
+  describe('the status poll predicts the fence, so the banner never offers a button that cannot work (#782)', () => {
+    // The deployment in the report: TLS ends at an Ingress, the original Host is
+    // forwarded to the pod, and the proxy adds X-Forwarded-For / X-Real-IP. The
+    // restart POST from the same page fails the loopback peer, the forwarding
+    // headers and the Host check all at once.
+    const shapes: Array<{ name: string; options: { remoteAddress?: string; forwarded?: boolean; host?: string }; reachable: boolean }> = [
+      { name: 'a direct local browser', options: {}, reachable: true },
+      { name: 'the Ingress deployment', options: { remoteAddress: '10.42.0.17', forwarded: true, host: 'dsh.example.com' }, reachable: false },
+      { name: 'a proxy peer alone', options: { remoteAddress: '10.42.0.17' }, reachable: false },
+      { name: 'forwarding headers alone', options: { forwarded: true }, reachable: false },
+      { name: 'a public Host on a loopback peer (rebinding shape)', options: { host: 'dsh.example.com' }, reachable: false },
+    ]
+
+    for (const shape of shapes) {
+      it(`${shape.name}: status says ${String(shape.reachable)} and the restart POST agrees`, async () => {
+        const status = await bed.dispatch('GET', '/dsh-market/status', undefined, shape.options)
+        expect(status.json.restartReachable).toBe(shape.reachable)
+        // `restart` is the user's own setting and must not carry this: the
+        // settings page reads it and writes it back.
+        expect(status.json.restart).toBe(true)
+
+        const origin = shape.options.host === undefined ? undefined : `https://${shape.options.host}`
+        const posted = await bed.dispatch('POST', '/dsh-market/restart', {}, { ...shape.options, ...(origin === undefined ? {} : { origin }) })
+        if (shape.reachable) expect(posted.status).not.toBe(403)
+        else expect(posted.status).toBe(403)
+      })
+    }
+  })
+
   it('refuses non-loopback peers, forwarded requests, and cross-origin posts', async () => {
     expect((await bed.dispatch('POST', '/dsh-market/restart', {}, { remoteAddress: '192.168.1.7' })).status).toBe(403)
     expect((await bed.dispatch('POST', '/dsh-market/restart', {}, { forwarded: true })).status).toBe(403)

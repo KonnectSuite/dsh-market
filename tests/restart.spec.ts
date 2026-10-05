@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { detectedDebugger, detectedSupervisor, respawnInvocation, restartAllowed, trustedDownloadRequest, trustedRestartRequest } from '../src/restart.ts'
+import { detectedDebugger, detectedSupervisor, respawnInvocation, restartAllowed, restartReachableFrom, trustedDownloadRequest, trustedRestartRequest } from '../src/restart.ts'
 
 const LAUNCH = { file: 'C:\\Program Files\\nodejs\\node.exe', args: ['--import', 'tsx/esm', 'bin.ts', '--profile', 'web'], viaShell: false }
 
@@ -123,6 +123,56 @@ describe('trustedRestartRequest', () => {
 
   it('refuses when the Host header is absent', () => {
     expect(trustedRestartRequest(req({ origin: 'http://127.0.0.1:3080' }))).toBe(false)
+  })
+})
+
+describe('restartReachableFrom — the prediction shares the fence, it does not copy it (#782)', () => {
+  /**
+   * The report: behind an Ingress the banner rendered a "restart now" button
+   * that could never succeed — every POST answered 403 — and nothing said so in
+   * advance. The status poll can answer "could a restart from this page pass the
+   * fence?", but only if it asks the SAME question the route asks. Two copies of
+   * the loopback rules would drift; this pins that they cannot.
+   */
+  const req = (headers: Record<string, string>, remoteAddress = '127.0.0.1') =>
+    ({ headers, socket: { remoteAddress } }) as unknown as Parameters<typeof restartReachableFrom>[0]
+  const direct = { host: '127.0.0.1:3080' }
+
+  it('is true for a direct local request, WITHOUT an Origin — a same-origin GET carries none', () => {
+    // A prediction that demanded Origin would call every ordinary local status
+    // poll impossible and take the button away from everyone.
+    expect(restartReachableFrom(req(direct))).toBe(true)
+    expect(restartReachableFrom(req({ host: 'localhost:3080' }, '::1'))).toBe(true)
+  })
+
+  it('is false for the reported Ingress shape: proxy peer, forwarding headers, public Host', () => {
+    const ingress = { host: 'dsh.example.com', 'x-forwarded-for': '203.0.113.9', 'x-real-ip': '203.0.113.9', 'x-forwarded-proto': 'https' }
+    expect(restartReachableFrom(req(ingress, '10.42.0.17'))).toBe(false)
+  })
+
+  it('fails on EACH criterion alone, so a partly-proxied deployment is not told yes', () => {
+    expect(restartReachableFrom(req(direct, '10.42.0.17')), 'non-loopback peer').toBe(false)
+    expect(restartReachableFrom(req({ ...direct, 'x-forwarded-for': '1.2.3.4' })), 'forwarding header').toBe(false)
+    expect(restartReachableFrom(req({ host: 'dsh.example.com' })), 'public Host on a loopback peer (rebinding)').toBe(false)
+  })
+
+  it('never says yes where the route would say no — one-directional by construction', () => {
+    // The route fence is the prediction PLUS an Origin condition, so over every
+    // combination the route may only accept a request the prediction accepts.
+    const peers = ['127.0.0.1', '::1', '10.0.0.2']
+    const hosts: Array<string | undefined> = ['127.0.0.1:3080', 'localhost:3080', 'dsh.example.com', undefined]
+    const origins: Array<string | undefined> = [undefined, 'http://127.0.0.1:3080', 'http://dsh.example.com', 'not a url']
+    const forwards: Array<Record<string, string>> = [{}, { 'x-forwarded-for': '1.2.3.4' }, { forwarded: 'for=1.2.3.4' }, { 'x-real-ip': '1.2.3.4' }]
+    let checked = 0
+    for (const peer of peers) for (const host of hosts) for (const origin of origins) for (const forward of forwards) {
+      const headers: Record<string, string> = { ...forward }
+      if (host !== undefined) headers.host = host
+      if (origin !== undefined) headers.origin = origin
+      const request = req(headers, peer)
+      if (trustedRestartRequest(request)) expect(restartReachableFrom(request), JSON.stringify({ peer, headers })).toBe(true)
+      checked += 1
+    }
+    expect(checked).toBe(peers.length * hosts.length * origins.length * forwards.length)
   })
 })
 

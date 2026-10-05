@@ -15,7 +15,7 @@ import css from '../../src/client/Market.module.css'
 import { downloadStatsText } from '../../src/client/download-stats.ts'
 import { SEARCH_DELAY_MS } from '../../src/client/SearchInput.tsx'
 import {
-  pluginScreenshotCandidates, resetGithubRouting, resetScreenshotsCache, setGithubRoutes,
+  pluginScreenshotCandidates, resetGithubRouting, resetScreenshotsCache, restartHintKey, setGithubRoutes,
 } from '../../src/client/market-data.ts'
 import { en, zh } from '../../src/client/locales.ts'
 
@@ -5586,6 +5586,87 @@ describe('standing restart notice for host-reported pending plugins', () => {
     render(<MarketSection {...props()} />)
     await waitFor(() => { expect(screen.getAllByText(re(en.restartBanner)).length).toBeGreaterThan(0) })
     expect(screen.queryByRole('button', { name: en.restartNow })).toBeNull()
+  })
+
+  describe('which explanation the restart banner carries (#782)', () => {
+    // The order IS the behaviour, and three states have each added a branch to
+    // the same ternary. A debugger outranks everything (the host will not stop);
+    // a proxy outranks a supervisor (the request cannot pass at all, whatever
+    // owns restarts); a supervisor outranks the plain how-to.
+    const base = { debuggerLatch: null, restartReachable: true, supervisor: null }
+
+    it('picks each reason on its own', () => {
+      expect(restartHintKey(base)).toBe('restartHint')
+      expect(restartHintKey({ ...base, supervisor: 'systemd' })).toBe('restartHintSupervised')
+      expect(restartHintKey({ ...base, restartReachable: false })).toBe('restartHintViaProxy')
+      expect(restartHintKey({ ...base, debuggerLatch: 'inspector' })).toBe('restartHintDebugged')
+    })
+
+    it('resolves two reasons at once in that order', () => {
+      expect(restartHintKey({ debuggerLatch: 'inspector', restartReachable: false, supervisor: 'systemd' })).toBe('restartHintDebugged')
+      expect(restartHintKey({ debuggerLatch: null, restartReachable: false, supervisor: 'systemd' })).toBe('restartHintViaProxy')
+    })
+
+    it('says the reason, the cause and the way out in plain words, in both languages', () => {
+      // AGENTS.md: what happened, why, what to do now — and say it to someone
+      // who is not an operator.
+      expect(zh.restartHintViaProxy).toContain('代理')
+      expect(zh.restartHintViaProxy).toContain('本机直连')
+      expect(zh.restartHintViaProxy).toContain('kubectl rollout restart')
+      expect(en.restartHintViaProxy).toContain('proxy or gateway')
+      expect(en.restartHintViaProxy).toContain('direct local connection')
+      expect(en.restartHintViaProxy).toContain('kubectl rollout restart')
+    })
+  })
+
+  describe('behind a reverse proxy the restart can never pass the fence (#782)', () => {
+    // The report: behind an Ingress the banner rendered "restart now" and every
+    // click answered 403 — the one button in the market that was enabled and
+    // could not succeed, with nothing saying so beforehand. The status poll now
+    // says whether a restart from THIS page could pass; the banner follows it.
+    function stubStatus(extra: Record<string, unknown>) {
+      vi.stubGlobal('fetch', vi.fn((url: string) => {
+        const path = String(url).split('?')[0]
+        const installed = { 'dsh-loop': '^1.0.0' }
+        const payload =
+          path === '/dsh-market/registry' ? { source: 'live', registry: REGISTRY }
+          : path === '/dsh-market/installed' ? {
+              profile: 'web', installed, live: [],
+              activation: { 'dsh-loop': { state: 'restart', reasons: ['in the bundle layer'], bundle: true, hot: false } },
+            }
+          : path === '/dsh-market/status' ? { active: false, busy: false, pnpm: true, boot: 'boot-1', restart: true, installed, ...extra }
+          : path === '/dsh-market/updates' ? { updates: {} }
+          : null
+        if (payload === null) return Promise.reject(new Error(`unstubbed fetch: ${String(url)}`))
+        return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }))
+      }))
+    }
+
+    it('keeps the banner, drops the button, and puts the reason in the hint', async () => {
+      stubStatus({ restartReachable: false })
+      render(<MarketSection {...props()} />)
+      await waitFor(() => { expect(screen.getAllByText(re(en.restartBanner)).length).toBeGreaterThan(0) })
+      // The fact that a restart is needed is still stated — only the impossible
+      // action goes. A banner that vanished would hide the fact itself.
+      expect(screen.queryByRole('button', { name: en.restartNow })).toBeNull()
+      // What the hint SAYS is pinned below, on the pure function that picks it.
+    })
+
+    it('keeps the button on an ordinary local host, where the signal is true', async () => {
+      stubStatus({ restartReachable: true })
+      render(<MarketSection {...props()} />)
+      await waitFor(() => { expect(screen.getAllByText(re(en.restartBanner)).length).toBeGreaterThan(0) })
+      expect(screen.getByRole('button', { name: en.restartNow })).toBeTruthy()
+    })
+
+    it('keeps the button when an older host does not report the signal at all', async () => {
+      // Only an explicit false removes the action. Absent reads as "reachable":
+      // the old behaviour, never a button taken away on a guess.
+      stubStatus({})
+      render(<MarketSection {...props()} />)
+      await waitFor(() => { expect(screen.getAllByText(re(en.restartBanner)).length).toBeGreaterThan(0) })
+      expect(screen.getByRole('button', { name: en.restartNow })).toBeTruthy()
+    })
   })
 })
 

@@ -52,7 +52,7 @@ import { updateNotesFor } from './changelog.ts'
 import { checkUpdates, isUpdatablePlugin, compareVersions, fetchNpmLatest, invalidateUpdates, resolveGitRemoteHead, isUpgrade, latestPublishedRecently, setUpdateRegistry, versionOnChannel } from './updates.ts'
 import { createThemeManager, type LoaderEntry } from './themes.ts'
 import { readJsonBody, sameOrigin, sendJson } from './http.ts'
-import { detectedDebugger, detectedSupervisor, restartAllowed, scheduleRestart, servingPort, trustedRestartRequest, trustedDownloadRequest, type RecoveryHandoffConfig } from './restart.ts'
+import { detectedDebugger, detectedSupervisor, restartAllowed, scheduleRestart, servingPort, trustedRestartRequest, trustedDownloadRequest, type RecoveryHandoffConfig, restartReachableFrom } from './restart.ts'
 import type { RecoveryPlugin } from './recovery.ts'
 import { activationAfterReplace, brokenClientBundles, checkClientBundle, defaultHostRuntimeFacts, hasHostHalf, hostPeerGate, newlyBrokenBundles, peerGateRemedy, verifyActivation } from './verify.ts'
 import {
@@ -3361,6 +3361,15 @@ export function mountMarketRoutes(
           // "no restart button" is the state #229 reported as broken.
           supervisor: detectedSupervisor(),
           debugger: detectedDebugger(),
+          // Whether a restart asked for from THIS page could pass the route's
+          // fence (#782). Per request, not per config: behind a reverse proxy
+          // the POST arrives over the same path as this GET, so it fails for
+          // the same reasons — and the banner used to render a button that
+          // answered 403 every time, with nothing saying so in advance. It is
+          // a prediction: the route still runs the whole fence on the POST.
+          // Deliberately NOT folded into `restart`, which is also what the
+          // settings page reads and writes back as the user's own choice.
+          restartReachable: restartReachableFrom(request),
           selfManaged: installed.dshmarket !== undefined || installed['dsh-market'] !== undefined,
           // Whether the host took the market's settings namespace (#677).
           // `unsupported-by-host` is 0.1.7 and newer, where settings come from

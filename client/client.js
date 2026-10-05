@@ -326,6 +326,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			restartHint: "重启方式：关闭当前 dsh 进程后重新运行（例如 dsh web）",
 			restartHintSupervised: "本进程是 {0} 服务的主进程，重启交给它负责——市场自己重启会连带杀掉 cgroup 里的接管进程，服务将起不来。请执行 systemctl restart <你的 unit>。确认你的配置能承受市场自行重启（如 KillMode=process），可在本插件配置里手动打开「允许重启」。",
 			restartHintDebugged: "当前 dsh 进程正被调试器连接。请从 IDE 或终端停止该进程后重新启动，市场不能从界面里结束正在调试的 dsh。",
+			restartHintViaProxy: "你是通过代理或网关访问的，出于安全，重启只接受本机直连。请在运行 dsh 的机器上重启它，例如 docker restart 或 kubectl rollout restart。",
 			confirmTitle: "安装",
 			confirmWarn: "社区第三方插件，构建脚本默认不运行。",
 			installCaution: "安装前请注意",
@@ -1019,6 +1020,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			restartHint: "To restart: stop the current dsh process and run it again (e.g. dsh web)",
 			restartHintSupervised: "This process is {0}'s own service process, so restarts belong to it — restarting from here would kill the takeover process along with the cgroup and the service would not come back. Use systemctl restart &lt;your unit&gt;. If your unit can survive a self-restart (KillMode=process), turn Allow restart on in this plugin's configuration.",
 			restartHintDebugged: "This dsh process is under a debugger. Stop it from your IDE or terminal and start it again — the market cannot stop the debugged process from the UI.",
+			restartHintViaProxy: "You are reaching dsh through a proxy or gateway, and for safety restart only accepts a direct local connection. Restart it on the machine running dsh, for example with docker restart or kubectl rollout restart.",
 			confirmTitle: "Install",
 			confirmWarn: "Community third-party plugin. Build scripts do not run by default.",
 			installCaution: "Before you install",
@@ -1821,6 +1823,12 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 		*/
 		function isGenerationSpec(spec) {
 			return /^link:/i.test(spec) && /(?:^|[\\/])\.generations[\\/]live[\\/]/i.test(spec);
+		}
+		function restartHintKey(state) {
+			if (state.debuggerLatch !== null) return "restartHintDebugged";
+			if (!state.restartReachable) return "restartHintViaProxy";
+			if (state.supervisor !== null) return "restartHintSupervised";
+			return "restartHint";
 		}
 		function groupSwitchState(members, disabled) {
 			const list = members ?? [];
@@ -8365,6 +8373,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			const [supervisor, setSupervisor] = (0, react.useState)(null);
 			/** Debugger latch when one-click restart must not kill the host (#447). */
 			const [debuggerLatch, setDebuggerLatch] = (0, react.useState)(null);
+			const [restartReachable, setRestartReachable] = (0, react.useState)(true);
 			const [restarting, setRestarting] = (0, react.useState)(false);
 			const [showTop, setShowTop] = (0, react.useState)(false);
 			const [backupBusy, setBackupBusy] = (0, react.useState)(false);
@@ -8622,6 +8631,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					setRestartEnabled(status.restart === true);
 					setSupervisor(typeof status.supervisor === "string" ? status.supervisor : null);
 					setDebuggerLatch(typeof status.debugger === "string" ? status.debugger : null);
+					setRestartReachable(status.restartReachable !== false);
 					if (typeof status.version === "string" && status.version !== "") setVersion(status.version);
 				}).catch(() => {});
 				refreshInstalled();
@@ -11828,14 +11838,18 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 										]
 									}),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
-										label: debuggerLatch !== null ? t("restartHintDebugged") : supervisor === null ? t("restartHint") : t("restartHintSupervised").replace("{0}", supervisor),
+										label: t(restartHintKey({
+											debuggerLatch,
+											restartReachable,
+											supervisor
+										})).replace("{0}", supervisor ?? ""),
 										side: "bottom",
 										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 											className: Market_module_css_default.bannerHint,
 											children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(IconQuestionOutline14, { size: 14 })
 										})
 									}),
-									restartEnabled && debuggerLatch === null && recovery === null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+									restartEnabled && restartReachable && debuggerLatch === null && recovery === null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 										variant: "primary",
 										size: "sm",
 										disabled: restarting || hostBusy || busyUrl !== null || updatingName !== null || removingName !== null,
