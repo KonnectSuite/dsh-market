@@ -1266,6 +1266,11 @@ export function mountMarketRoutes(
     // and the page then tells the user to refresh, which is the one thing
     // that cannot help.
     const native = holdsNativeAddon(config.profile, name, activeProfileDir)
+    // Asked BEFORE the removal, like `native` above and for the same reason:
+    // the row ids come from the package's own bundle patch, which the remove
+    // deletes. Read afterwards this returns [] and the rows survive the
+    // package as boot-time orphans (#799).
+    const ownedRows = rowIdsForPackage(host, activeProfileDir, name)
     const result = await runPlugin(config.profile, ['remove', name])
     if (result.exitCode !== 0 || result.timedOut || result.cancelled) {
       return { ok: false, hot: false, detail: failureDetail(result) }
@@ -1293,7 +1298,7 @@ export function mountMarketRoutes(
     if (native) {
       logEvent('info', 'uninstall', `${name} ships or depends on a native addon; a restart is needed before it can be installed again`)
     }
-    removeRowBlocks(userPatchPath, rowIdsForPackage(host, activeProfileDir, name))
+    removeRowBlocks(userPatchPath, ownedRows)
     disabled.delete(name)
     replacedWhileLive.delete(name)
     removeFromGroups({ groups, groupOrder }, name)
@@ -5370,6 +5375,12 @@ sendJson(response, 200, { updates })
             // `hot` would send the user to a page refresh, which is the one
             // thing that cannot help.
             const heldNativeAddon = holdsNativeAddon(config.profile, name, activeProfileDir)
+            // And once more, for the same reason: `rowIdsForPackage` names the
+            // rows from the package's own bundle patch, which the remove below
+            // deletes. Asked afterwards it answers [] on exactly the uninstall
+            // it is meant to clean up after, and the rows outlive the package
+            // as boot-time orphans (#799).
+            const ownedRows = rowIdsForPackage(host, activeProfileDir, name)
             const result = await runPlugin(config.profile, ['remove', name])
             const cancelled = result.cancelled
             const ok = result.exitCode === 0 && !result.timedOut && !cancelled
@@ -5433,7 +5444,7 @@ sendJson(response, 200, { updates })
               // Patch-layer rows must not survive the remove either: a
               // `- id: X` + `disabled: true` row for a package that no longer
               // mounts is a boot-time orphan (port of dsh-plugin-hub).
-              removeRowBlocks(userPatchPath, rowIdsForPackage(host, activeProfileDir, name))
+              removeRowBlocks(userPatchPath, ownedRows)
               // The disable list must not keep a removed plugin: a later
               // reinstall starts enabled. Group memberships follow the same
               // rule so no group toggle ever targets a ghost member.
