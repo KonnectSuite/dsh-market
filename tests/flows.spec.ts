@@ -2054,6 +2054,39 @@ describe('update flow — no npm publishing required', () => {
     })
   }
 
+  it('refuses a plain dependency before touching anything, instead of running pnpm and rolling back (#793)', async () => {
+    // A direct dependency that is only a CLI: no dsh field, not a bundle, no
+    // patch row loads it. The host answers a package like that with
+    // `not-bundle` AFTER the run, and the rollback message then reads as though
+    // the profile were damaged. Nothing was ever changed, so say that, first.
+    const dir = join(fake.profileDir, 'node_modules', 'mnemon')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'mnemon', version: '0.2.9', bin: { mnemon: './cli.js' } }))
+    const manifest = readManifestAt(fake.profileDir)
+    writeFileSync(join(fake.profileDir, 'package.json'), JSON.stringify({
+      ...manifest, dependencies: { ...manifest.dependencies, mnemon: '^0.2.9' },
+    }))
+    const callsBefore = fake.calls.length
+
+    const r = await bed.dispatch('POST', '/dsh-market/update', { name: 'mnemon' })
+
+    expect(r.status).toBe(400)
+    expect(r.json.notAPlugin).toBe(true)
+    // Nothing ran: no pnpm call at all, so there is nothing to roll back.
+    expect(fake.calls.slice(callsBefore)).toHaveLength(0)
+    expect(String(r.json.error)).toContain('什么都没有改动')
+    expect(String(r.json.error)).toContain('Nothing was changed')
+    expect(String(r.json.error)).not.toContain('could not be verified')
+    expect(readManifestAt(fake.profileDir).dependencies?.mnemon).toBe('^0.2.9')
+  })
+
+  it('still updates a plugin that declares a dsh surface — the refusal is not a blanket one (#793)', async () => {
+    advanceNpmLatest('1.2.0')
+    const r = await bed.dispatch('POST', '/dsh-market/update', { name: 'dsh-loop' })
+    expect(r.json.notAPlugin).toBeUndefined()
+    expect(r.status).toBe(200)
+  })
+
   it('leaves a build the host holds open alone instead of a rollback that hits the same lock (#608)', async () => {
     advanceNpmLatest('1.2.0')
     const lockBefore = readFileSync(join(fake.profileDir, 'pnpm-lock.yaml'), 'utf8')

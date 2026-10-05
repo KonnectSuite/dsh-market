@@ -105,7 +105,7 @@ describe('checkUpdates — github pins', () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'dshm-upd-')), 'profiles', 'web')
     mkdirSync(join(dir, 'node_modules', 'themer'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { themer: spec } }))
-    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version }))
+    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
     writeFileSync(join(dir, 'pnpm-lock.yaml'), commit === null ? 'lockfileVersion: 9\n'
       : `  resolution: {tarball: https://codeload.github.com/owner/themer/tar.gz/${commit}}\n`)
     return dir
@@ -251,7 +251,7 @@ describe('checkUpdates — private git hosts (#525)', () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'dshm-gitea-')), 'profiles', 'web')
     mkdirSync(join(dir, 'node_modules', 'themer'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { themer: spec } }))
-    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version }))
+    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
     // pnpm's non-GitHub git resolution shape — not a codeload tarball.
     writeFileSync(join(dir, 'pnpm-lock.yaml'), lockCommit === null ? 'lockfileVersion: 9\n'
       : `lockfileVersion: 9\npackages:\n  themer@${spec}:\n    resolution: {commit: ${lockCommit}, repo: ${spec}, type: git}\n`)
@@ -385,7 +385,7 @@ describe('checkUpdates — private git hosts (#525)', () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'dshm-shorthand-')), 'profiles', 'web')
     mkdirSync(join(dir, 'node_modules', 'themer'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { themer: spec } }))
-    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version: '1.0.0' }))
+    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
     writeFileSync(join(dir, 'pnpm-lock.yaml'),
       `lockfileVersion: 9\npackages:\n  themer@${tarball}:\n    resolution: {gitHosted: true, tarball: ${tarball}}\n`)
     return dir
@@ -527,7 +527,7 @@ describe('checkUpdates — the channel is part of the cache key', () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'dshm-chan-')), 'profiles', 'web')
     mkdirSync(join(dir, 'node_modules', 'dshmarket'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { dshmarket: '^1.0.0' } }))
-    writeFileSync(join(dir, 'node_modules', 'dshmarket', 'package.json'), JSON.stringify({ name: 'dshmarket', version: '1.0.0' }))
+    writeFileSync(join(dir, 'node_modules', 'dshmarket', 'package.json'), JSON.stringify({ name: 'dshmarket', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
 
     const asked: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
@@ -554,7 +554,7 @@ describe('updateAvailable means NEWER, and only that', () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'dshm-dir-')), 'profiles', 'web')
     mkdirSync(join(dir, 'node_modules', 'dshmarket'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { dshmarket: '^1.0.0' } }))
-    writeFileSync(join(dir, 'node_modules', 'dshmarket', 'package.json'), JSON.stringify({ name: 'dshmarket', version: installedVersion }))
+    writeFileSync(join(dir, 'node_modules', 'dshmarket', 'package.json'), JSON.stringify({ name: 'dshmarket', version: installedVersion, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
     vi.stubGlobal('fetch', vi.fn((url: unknown) => {
       const tag = String(url).split('/').pop() ?? ''
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: tags[tag] }) })
@@ -619,7 +619,7 @@ describe('checkUpdates — URL installs and catalog authorization (#768)', () =>
     const dir = mkdtempSync(join(tmpdir(), 'dsh-updates-768-'))
     mkdirSync(join(dir, 'node_modules', 'themer'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { themer: spec } }))
-    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version }))
+    writeFileSync(join(dir, 'node_modules', 'themer', 'package.json'), JSON.stringify({ name: 'themer', version, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
     writeFileSync(join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
     return dir
   }
@@ -668,5 +668,73 @@ describe('checkUpdates — URL installs and catalog authorization (#768)', () =>
       expect(npm.hits()).toBe(0)
       expect(row).toMatchObject({ kind: 'npm', current: '1.0.0', latest: null, updateAvailable: false })
     } finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('checkUpdates — a plain dependency is not an update the market can apply (#793)', () => {
+  /**
+   * The report: a direct dependency that is only a CLI (`@mnemon-dev/mnemon`,
+   * a `bin` and no `dsh` field) was listed as updatable, and every click ended
+   * in the host's `not-bundle` followed by a rollback message that read as if
+   * the profile had been damaged. Nothing had been touched. The detection layer
+   * only asked "is it a direct dependency with a newer release", never "is it
+   * a plugin".
+   */
+  const bed = (manifest: Record<string, unknown>, options: { bundles?: string[]; patch?: string } = {}) => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'dshm-plain-')), 'profiles', 'web')
+    mkdirSync(join(dir, 'node_modules', 'thing'), { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      dependencies: { thing: '^0.2.9' },
+      ...(options.bundles === undefined ? {} : { dsh: { profile: { bundles: options.bundles } } }),
+    }))
+    writeFileSync(join(dir, 'node_modules', 'thing', 'package.json'), JSON.stringify({ name: 'thing', version: '0.2.9', ...manifest }))
+    if (options.patch !== undefined) writeFileSync(join(dir, 'cordis.patch.yml'), options.patch)
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ version: '0.2.10' }) })))
+    return dir
+  }
+  const check = async (dir: string) => (await checkUpdates('web', true, dir))['thing']
+
+  it('does not offer an update for a CLI with no dsh field, but still names the newer release', async () => {
+    const dir = bed({ bin: { thing: './cli.js' } })
+    try {
+      const row = await check(dir)
+      expect(row?.updateAvailable, 'a library was offered as an update').toBe(false)
+      expect(row?.notAPlugin).toBe(true)
+      // Silence would be a different bug: the user is entitled to know a newer
+      // release exists, they just cannot have it applied through this channel.
+      expect(row?.latest).toBe('0.2.10')
+    } finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('keeps offering a package that declares a dsh surface', async () => {
+    const dir = bed({ dsh: { bundle: { patch: './cordis.patch.yml' } } })
+    try {
+      const row = await check(dir)
+      expect(row?.updateAvailable).toBe(true)
+      expect(row?.notAPlugin).toBeUndefined()
+    } finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('keeps offering a package the profile lists as a bundle, whatever its manifest says', async () => {
+    const dir = bed({}, { bundles: ['thing'] })
+    try { expect((await check(dir))?.updateAvailable).toBe(true) }
+    finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('keeps offering a package one of the user\'s own patch rows loads by name', async () => {
+    // A real plugin can declare nothing itself: @deepseek-ai/dsh-tools has no
+    // dsh field and is loaded by name from a patch. Calling that "a library"
+    // would silently stop offering the updates of something that works.
+    const dir = bed({}, { patch: "- insert:\n    - id: thing\n      name: 'thing'\n" })
+    try { expect((await check(dir))?.updateAvailable).toBe(true) }
+    finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('leaves the offer standing when it cannot tell — an unreadable patch hides nothing', async () => {
+    // This rule only ever REMOVES an offer, so uncertainty has to resolve to
+    // the old behaviour, not to a quietly missing update.
+    const dir = bed({}, { patch: "- insert: [unterminated\n  : : :" })
+    try { expect((await check(dir))?.updateAvailable).toBe(true) }
+    finally { vi.unstubAllGlobals(); rmSync(dir, { recursive: true, force: true }) }
   })
 })

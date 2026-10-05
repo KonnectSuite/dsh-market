@@ -49,7 +49,7 @@ import {
 import { resolveRegion } from './region-probe.ts'
 import { acceleratedTarget, resolveHeadCommit } from './accelerate.ts'
 import { updateNotesFor } from './changelog.ts'
-import { checkUpdates, compareVersions, fetchNpmLatest, invalidateUpdates, resolveGitRemoteHead, isUpgrade, latestPublishedRecently, setUpdateRegistry, versionOnChannel } from './updates.ts'
+import { checkUpdates, isUpdatablePlugin, compareVersions, fetchNpmLatest, invalidateUpdates, resolveGitRemoteHead, isUpgrade, latestPublishedRecently, setUpdateRegistry, versionOnChannel } from './updates.ts'
 import { createThemeManager, type LoaderEntry } from './themes.ts'
 import { readJsonBody, sameOrigin, sendJson } from './http.ts'
 import { detectedDebugger, detectedSupervisor, restartAllowed, scheduleRestart, servingPort, trustedRestartRequest, trustedDownloadRequest, type RecoveryHandoffConfig } from './restart.ts'
@@ -3816,6 +3816,22 @@ sendJson(response, 200, { updates })
                 error: `有 agent 正在运行（${busyAgents.join(', ')}）。更新会直接替换插件文件，正在工作的 agent 可能在执行中途读到缺失或新版本的文件而报错；请等它完成或取消后再更新。 / ${busyAgents.length === 1 ? 'An agent is running' : 'Agents are running'} (${busyAgents.join(', ')}). Updating replaces plugin files in place, so a working agent can fail or mix versions mid-turn; wait for it to finish (or cancel it) before updating.`,
                 agentsBusy: true,
                 runningAgents: busyAgents,
+              })
+              return
+            }
+            // A plain dependency is not something this route can update (#793).
+            // The detection layer no longer offers it, but a queued row, an old
+            // page, or a direct call can still arrive here — and the host's
+            // answer to a package with no bundle patch is `not-bundle` AFTER the
+            // run, followed by a rollback message that reads as though the
+            // profile were damaged. Nothing would have been touched. Refuse
+            // before anything is, and say so. Skipped for a `restore`, which
+            // replaces a local checkout with its catalog source on purpose.
+            if (!restore && !isUpdatablePlugin(activeProfileDir, name, new Set(readProfileBundles(activeProfileDir)))) {
+              logEvent('warn', 'update-refused', `${name}: not a plugin (no dsh field, not in dsh.profile.bundles, no patch row loads it) — nothing was changed`)
+              sendJson(response, 400, {
+                notAPlugin: true,
+                error: `${name} 只是 profile 里的一个普通依赖，不是插件，市场没法更新它。什么都没有改动，也不需要回滚。如果要升级它，请在命令行里用 pnpm 升级。 / ${name} is a plain dependency in this profile, not a plugin, so the market cannot update it. Nothing was changed and nothing needs rolling back. To upgrade it, use pnpm from the command line.`,
               })
               return
             }
