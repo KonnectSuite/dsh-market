@@ -32,6 +32,15 @@ const fake = vi.hoisted(() => ({
    * target shape beside npm names and github: shortcuts, and the only one
    * that must never have a dist-tag appended to it. */
   tarballs: {} as Record<string, { name: string; manifest: unknown; artifacts?: string[]; artifactContents?: Record<string, string> }>,
+  /**
+   * pnpm 11.0-11.8 under `nodeLinker: hoisted` records no `integrity` for a
+   * bare release-asset URL and refuses it before linking anything (#797,
+   * measured on 11.7.0 and 11.8.0). Every http(s) add fails that way while
+   * set; `github:` targets are unaffected, as they are on those versions.
+   */
+  tarballWithoutIntegrity: false,
+  /** Answer every http(s) add with this stderr instead (a failure that is NOT the integrity one). */
+  tarballFailsWith: '',
   /** Simulate pnpm minimumReleaseAge: adds resolve to the ALREADY INSTALLED version, exit 0. */
   staleUpdates: false,
   /**
@@ -426,6 +435,15 @@ vi.mock('../src/dsh-cli.ts', () => {
         return { exitCode: 1, timedOut: false, stdout: '', stderr, cancelled: false }
       }
       return ok
+    }
+    if (/^https?:/.test(target) && fake.tarballFailsWith !== '') {
+      return { exitCode: 1, timedOut: false, stdout: '', cancelled: false, stderr: fake.tarballFailsWith }
+    }
+    if (/^https?:/.test(target) && fake.tarballWithoutIntegrity) {
+      return {
+        exitCode: 1, timedOut: false, stdout: '', cancelled: false,
+        stderr: `[ERR_PNPM_MISSING_TARBALL_INTEGRITY] Cannot install package "dsh-prebuilt@${target}": its lockfile entry has no "integrity" field, so pnpm cannot verify the downloaded tarball.`,
+      }
     }
     if (/^https?:/.test(target)) {
       const prebuilt = fake.tarballs[target]
@@ -826,6 +844,8 @@ beforeEach(() => {
   fake.npm = {}
   fake.repos = {}
   fake.tarballs = {}
+  fake.tarballWithoutIntegrity = false
+  fake.tarballFailsWith = ''
   fake.staleUpdates = false
   fake.releaseHold = null
   fake.resolvedNpmVersionOnce = null
@@ -1512,6 +1532,53 @@ describe('install flow', () => {
     const listed = await bed.dispatch('GET', '/dsh-market/installed')
     expect(listed.json.installed['dsh-loop']).toBe('^1.0.0')
     expect(listed.json.activation['dsh-loop'].state).toBe('live')
+  })
+
+  describe('a prebuilt release archive pnpm cannot verify (#797)', () => {
+    const TARBALL = 'https://github.com/o/dsh-prebuilt/releases/download/v1.0.0/dsh-prebuilt.tgz'
+    const archivePackage = { name: 'dsh-prebuilt', manifest: { name: 'dsh-prebuilt', version: '1.0.0', dsh: {}, main: 'index.js' }, artifacts: ['index.js'] }
+
+    it('still installs from the archive where pnpm records its integrity', async () => {
+      // The fast path is the point of the field; a fix that quietly stopped
+      // using it would pass the next test and cost every install the speed.
+      fake.tarballs[TARBALL] = archivePackage
+      const r = await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-prebuilt' })
+      expect(r.json.ok).toBe(true)
+      expect(installedSpec('dsh-prebuilt')).toBe(TARBALL)
+      expect(fake.calls.filter(call => call[0] === 'add').map(call => call[call.length - 1])).toEqual([TARBALL])
+    })
+
+    it('installs from the entry\'s own GitHub source when pnpm refuses the archive for want of an integrity', async () => {
+      // pnpm 11.0-11.8 on the hoisted linker every DSH profile uses: the same
+      // URL fails before linking anything, while `github:` on the same pnpm
+      // installs. ~330 catalog entries carry a tarball, so this was every
+      // one of them.
+      fake.tarballWithoutIntegrity = true
+      fake.repos['github:o/dsh-prebuilt'] = { name: 'dsh-prebuilt', manifest: archivePackage.manifest, artifacts: ['index.js'] }
+
+      const r = await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-prebuilt' })
+
+      expect(r.status).toBe(200)
+      expect(r.json.ok).toBe(true)
+      expect(installedSpec('dsh-prebuilt')).toBe('github:o/dsh-prebuilt')
+      // Exactly one retry, and the retry is the entry's own source — not the
+      // archive again, not a guessed name.
+      expect(fake.calls.filter(call => call[0] === 'add').map(call => call[call.length - 1]))
+        .toEqual([TARBALL, 'github:o/dsh-prebuilt'])
+      // The refused attempt left nothing in the manifest.
+      expect(readManifestAt(fake.profileDir).dependencies?.['dsh-prebuilt']).toBe('github:o/dsh-prebuilt')
+    })
+
+    it('does not retry a different failure from the archive — that one keeps its own diagnosis', async () => {
+      fake.tarballs[TARBALL] = archivePackage
+      fake.tarballFailsWith = 'ERR_PNPM_FETCH_404  GET https://github.com/o/dsh-prebuilt/releases/download/v1.0.0/dsh-prebuilt.tgz: Not Found - 404'
+      fake.repos['github:o/dsh-prebuilt'] = { name: 'dsh-prebuilt', manifest: archivePackage.manifest, artifacts: ['index.js'] }
+
+      const r = await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-prebuilt' })
+
+      expect(r.json.ok).not.toBe(true)
+      expect(fake.calls.filter(call => call[0] === 'add')).toHaveLength(1)
+    })
   })
 
   it('names the plugin a dependency library came in with, instead of calling it inactive (#634)', async () => {

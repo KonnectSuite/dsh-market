@@ -38,7 +38,7 @@ import { applyBundleOrder, mergeOrder, readBundleRules, readBundleStack, validat
 import { applyPreset, deletePreset, listPresets, previewPreset, savePreset } from './presets.ts'
 import { createProfileSnapshot, DEFAULT_MAX_SNAPSHOTS, deleteSnapshot, listSnapshots, restoreSnapshot } from './snapshot.ts'
 import { trialValidate } from './trial.ts'
-import { catalogRepoKey, codeloadAllowBuildsKey, findCatalogEntryForLocal, findInstalledAlias, gitCommitOfTarget, githubCommitOfTarget, githubTargetAtCommit, gitAllowBuildsKey, gitRefOfTarget, gitTargetAtCommit, gitUpdateTarget, hostedRepoKey, lookupRepoFromUrl, pinnedGitAllowBuildsKey, installTargetFor, isGenerationLink, isLocalSpec, NPM_NAME_RE, repoOfTarget, restoreBlockedByWorkspace, restoreTargetForLocal, workspaceProtocolDeps } from './sources.ts'
+import { catalogRepoKey, codeloadAllowBuildsKey, findCatalogEntryForLocal, findInstalledAlias, gitCommitOfTarget, githubCommitOfTarget, githubTargetAtCommit, gitAllowBuildsKey, gitRefOfTarget, gitTargetAtCommit, gitUpdateTarget, hostedRepoKey, lookupRepoFromUrl, pinnedGitAllowBuildsKey, installTargetFor, isGenerationLink, isLocalSpec, NPM_NAME_RE, repoOfTarget, restoreBlockedByWorkspace, restoreTargetForLocal, sourceFallbackFor, workspaceProtocolDeps } from './sources.ts'
 import { failureDetail, groupConflictsByOwner, isStaleUpdate, parseIgnoredBuildEntries, parseIgnoredBuilds, parsePrepareKey, parsePrepareNotAllowed, pnpmBlockedByOpenFiles, pnpmNeverStarted, RELEASE_AGE_OVERRIDE, removeDanglingHostBridge, retargetCollections, validateAddedPlugins, withHoistRecovery } from './install.ts'
 import { classifyPnpmFailure } from './pnpm-compat.ts'
 import { asChannel, CHANNELS, DIST_TAG, resolveChannel, type Channel } from './channels.ts'
@@ -5798,6 +5798,28 @@ sendJson(response, 200, { updates })
                   target = plainTarget
                   result = await runPlugin(config.profile, ['add', target])
                 }
+              }
+            }
+            // A prebuilt release tarball that pnpm cannot verify (#797). pnpm
+            // 11.0-11.8 writes no `integrity` for a bare release-asset URL
+            // under the hoisted linker every DSH profile uses, so the install
+            // fails before anything is linked — for the ~330 catalog entries
+            // that carry a `tarball`. The same entry installs from its own
+            // GitHub source on that pnpm, so go there ONCE, and only for this
+            // exact failure on this exact target: any other failure keeps its
+            // own diagnosis, and a target that was never the entry's verified
+            // tarball (an npm name, or already `github:`) is left alone.
+            if ((result.exitCode !== 0 || result.timedOut) && !result.cancelled) {
+              const sourceTarget = sourceFallbackFor(entry, target)
+              const failure = sourceTarget === null
+                ? null
+                : classifyPnpmFailure(`${result.stderr}\n${result.stdout}`, result.exitCode)
+              if (sourceTarget !== null && failure?.code === 'missing-tarball-integrity') {
+                logEvent('warn', 'install', `${entry.name}: pnpm could not verify the prebuilt release archive (no integrity recorded) — installing from the GitHub source instead (#797)`)
+                restoreProfileManifest(config.profile, manifestBefore, activeProfileDir)
+                if (lockfileBefore.ok) restoreProfileLockfile(lockfileBefore.snapshot)
+                target = await acceleratedTarget(sourceTarget, region)
+                result = await runPlugin(config.profile, ['add', target])
               }
             }
             const cancelled = result.cancelled

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  sourceFallbackFor,
   githubRefOfTarget,
   findCatalogEntryForLocal, findInstalledAlias, gitAllowBuildsKey, githubRemoteIdentities, githubRepoIdentities, githubRepoIdentity, githubTargetAtCommit, gitTargetAtCommit,
   gitCommitOfTarget, gitRefOfTarget, gitUpdateTarget, gitUploadPackUrl, hostedRepoKey, installTargetFor, isGitHostedSpec, isLocalSpec, lookupRepoFromUrl, parseGitHubRemote, parseGitHubRepository, parseSourceUrl, repoOf, resolveCatalogRestore, restoreBlockedByWorkspace, restoreTargetForLocal, workspaceProtocolDeps,
@@ -584,5 +585,40 @@ describe('host shorthands pnpm writes back: gitlab: / bitbucket: (#637)', () => 
     // github: keeps its own extractor; an npm name has no ref at all.
     expect(gitRefOfTarget('github:o/r#next')).toBeNull()
     expect(gitRefOfTarget('themer')).toBeNull()
+  })
+})
+
+describe('sourceFallbackFor (#797)', () => {
+  const tarball = 'https://github.com/o/r/releases/download/v1.2.3/dsh-loop-1.2.3.tgz'
+  const entry = { url: 'https://github.com/o/r', tarball }
+
+  it('names the entry\'s own GitHub source for its verified release archive', () => {
+    expect(sourceFallbackFor(entry, tarball)).toBe('github:o/r')
+    // A monorepo entry keeps its subpath, the same as it would have installed.
+    expect(sourceFallbackFor({ url: 'https://github.com/o/r/tree/main/packages/p', tarball }, tarball))
+      .toBe('github:o/r#path:/packages/p')
+  })
+
+  it('is the same source installTargetFor falls to when there is no archive', () => {
+    expect(sourceFallbackFor(entry, tarball)).toBe(installTargetFor({ url: entry.url }))
+  })
+
+  it('refuses every target that was not this entry\'s verified archive', () => {
+    // An npm install, an already-source install, and an archive the entry
+    // does not carry: none of them is a failure to degrade from.
+    expect(sourceFallbackFor({ ...entry, npm: 'dsh-loop' }, 'dsh-loop')).toBeNull()
+    expect(sourceFallbackFor(entry, 'github:o/r')).toBeNull()
+    expect(sourceFallbackFor(entry, 'https://github.com/o/r/releases/download/v9/other.tgz')).toBeNull()
+  })
+
+  it('does not turn a foreign archive into a retry, so the repo binding stays the only authority', () => {
+    // releaseTarballTarget refuses an archive from another owner; the fallback
+    // must not become a way to reach that entry's source after all.
+    const foreign = 'https://github.com/evil/repo/releases/download/v1/p.tgz'
+    expect(sourceFallbackFor({ url: 'https://github.com/good/plugin', tarball: foreign }, foreign)).toBeNull()
+  })
+
+  it('has nothing to fall back to for an unsupported source url', () => {
+    expect(sourceFallbackFor({ url: 'https://gitlab.com/o/r', tarball }, tarball)).toBeNull()
   })
 })
