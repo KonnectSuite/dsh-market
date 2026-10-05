@@ -708,6 +708,27 @@ describe('carrierDisableIds', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('reads every file of an ARRAY-declared patch — the foreign disable in the second counts (#792, #224)', () => {
+    const dir = patchDir()
+    try {
+      // Same brick-the-boot shape as #224, but declared as a LIST of patch
+      // files (the host composes both). A string-only read saw no declared
+      // patch at all, so the array package toggled off without the #224
+      // bundle-removal guard firing.
+      const pkg = join(dir, 'node_modules', 'dsh-array-carrier')
+      mkdirSync(pkg, { recursive: true })
+      writeFileSync(join(pkg, 'package.json'), JSON.stringify({
+        name: 'dsh-array-carrier',
+        dsh: { bundle: { patch: ['./base.patch.yml', './carve.patch.yml'] } },
+      }))
+      writeFileSync(join(pkg, 'base.patch.yml'), '- insert:\n    - id: carrier-main\n      name: dsh-array-carrier\n')
+      writeFileSync(join(pkg, 'carve.patch.yml'), '- id: session-persistence-jsonl\n  disabled: true\n')
+      expect(carrierDisableIds(dir, 'dsh-array-carrier')).toEqual(['session-persistence-jsonl'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('foreignRowIds', () => {
@@ -801,6 +822,27 @@ describe('foreignRowIds', () => {
     const dir = patchDir()
     try {
       expect(foreignRowIds(dir, 'not-installed')).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('judges ownership across every file of an ARRAY-declared patch (#792, #696 B)', () => {
+    const dir = patchDir()
+    try {
+      // The neighbour tweak lives in the SECOND declared file: ownership is
+      // per file, and a string-only read ignored the whole list — the array
+      // package looked like it owned nothing foreign and its toggle-off
+      // wrongly left it in the bundle stack (#696 B).
+      const pkg = join(dir, 'node_modules', 'dsh-array-carrier')
+      mkdirSync(pkg, { recursive: true })
+      writeFileSync(join(pkg, 'package.json'), JSON.stringify({
+        name: 'dsh-array-carrier',
+        dsh: { bundle: { patch: ['./own.patch.yml', './tweak.patch.yml'] } },
+      }))
+      writeFileSync(join(pkg, 'own.patch.yml'), '- insert:\n    - id: carrier-main\n      name: dsh-array-carrier\n')
+      writeFileSync(join(pkg, 'tweak.patch.yml'), '- id: neighbour-row\n  config:\n    tuned: true\n')
+      expect(foreignRowIds(dir, 'dsh-array-carrier')).toEqual(['neighbour-row'])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

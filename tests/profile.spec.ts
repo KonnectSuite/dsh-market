@@ -9,7 +9,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { resolveDshHome } from '../src/home-paths.ts'
 import {
-  addProfileBundle, conflictingEntryIds, dropFromManifest, entryArtifactExists, hasDshManifest, hasLoadableEntry, holdsNativeAddon, isDshProfileName, mergeDuplicateReleaseAgeExcludes, pluginSubdirs, profileDir,
+  addProfileBundle, bundlePatchInsertedIds, bundlePatchTargets, conflictingEntryIds, declaredBundlePatchFiles, dropFromManifest, entryArtifactExists, hasDshManifest, hasLoadableEntry, holdsNativeAddon, isDshProfileName, mergeDuplicateReleaseAgeExcludes, pluginSubdirs, profileDir,
   readDependencyOwners, readGitResolutionCommit, readInstalled, readInstalledManifest, readInstalledRepoEvidence, readInstalledRepoIdentities, readInstalledVersion, readLockCommits,
   removeProfileBundle,
 } from '../src/profile.ts'
@@ -632,6 +632,95 @@ describe('hasLoadableEntry — carrier bundles (#203)', () => {
     // Nothing written for the target in any of the three locations.
 
     expect(hasLoadableEntry(profile, 'carrier')).toBe(false)
+  })
+})
+
+/**
+ * #792: the host composes an ARRAY `dsh.bundle.patch` in order (official
+ * dsh-web-app ships five files). Reading only a string turned such a package
+ * into one with no declared patch at all — no rows, no targets, no entry.
+ */
+describe('bundle patch readers vs an array declaration (#792)', () => {
+  function carrier(name: string, patch: unknown, files: Record<string, string>): string {
+    const dir = join(profileDir('web'), 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, dsh: { bundle: { patch } } }))
+    for (const [rel, text] of Object.entries(files)) writeFileSync(join(dir, rel), text)
+    return dir
+  }
+
+  it('merges rows from every file of an array declaration, in order', () => {
+    const dir = carrier('multi-patch', ['./a.patch.yml', './b.patch.yml'], {
+      'a.patch.yml': '- insert:\n    - id: arr-a\n      name: dep-a\n',
+      'b.patch.yml': '- insert:\n    - id: arr-b\n      name: dep-b\n',
+    })
+    expect(bundlePatchTargets(dir)).toEqual(['dep-a', 'dep-b'])
+    expect(bundlePatchInsertedIds(dir)).toEqual(['arr-a', 'arr-b'])
+  })
+
+  it('answers nothing when any declared file is unreadable', () => {
+    // All or nothing, mirroring the host: one missing overlay file makes
+    // loadOverlayPatches throw and the whole bundle is skipped — the
+    // readable remainder may not stay in effect on the market's side.
+    const dir = carrier('partial-patch', ['./gone.patch.yml', './b.patch.yml'], {
+      'b.patch.yml': '- insert:\n    - id: arr-b\n      name: dep-b\n',
+    })
+    expect(bundlePatchTargets(dir)).toEqual([])
+    expect(bundlePatchInsertedIds(dir)).toEqual([])
+  })
+})
+
+/** The declaration reader itself, pinned shape by shape against the host. */
+describe('declaredBundlePatchFiles — one patch file or a list (#792)', () => {
+  function carrier(dir: string, patch: unknown): string {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'carrier', dsh: { bundle: { patch } } }))
+    return dir
+  }
+
+  it('wraps a string declaration into the single joined path — subdirectories included (#646)', () => {
+    const dir = carrier(join(profileDir('web'), 'node_modules', 'carrier'), './patches/cordis.patch.yml')
+    expect(declaredBundlePatchFiles(dir)).toEqual([join(dir, 'patches', 'cordis.patch.yml')])
+  })
+
+  it('returns every file of an array declaration, in order', () => {
+    // dsh-web-app ships five; two are enough to pin the shape.
+    const dir = carrier(join(profileDir('web'), 'node_modules', 'carrier'), ['./a.patch.yml', 'sub/b.patch.yml'])
+    expect(declaredBundlePatchFiles(dir)).toEqual([join(dir, 'a.patch.yml'), join(dir, 'sub', 'b.patch.yml')])
+  })
+
+  it('keeps the string items, in order, of a list holding a non-string item', () => {
+    // The host requires every item to be a string and skips the whole bundle
+    // otherwise; the read-side precedent is check.ts's declaredList (#676),
+    // which filters instead of throwing — a mixed list contributes its
+    // string files in order (#792).
+    const dir = carrier(join(profileDir('web'), 'node_modules', 'carrier'), ['./a.patch.yml', 42])
+    expect(declaredBundlePatchFiles(dir)).toEqual([join(dir, 'a.patch.yml')])
+  })
+
+  it('treats a list with no string items as none', () => {
+    const dir = carrier(join(profileDir('web'), 'node_modules', 'carrier'), [42, null])
+    expect(declaredBundlePatchFiles(dir)).toEqual([])
+  })
+
+  it('treats a declaration that is neither string nor array as none', () => {
+    const root = join(profileDir('web'), 'node_modules', 'carrier')
+    expect(declaredBundlePatchFiles(carrier(root, 42))).toEqual([])
+    expect(declaredBundlePatchFiles(carrier(root, { file: 'x' }))).toEqual([])
+    expect(declaredBundlePatchFiles(carrier(root, undefined))).toEqual([])
+  })
+
+  it('treats an empty string declaration as none', () => {
+    const dir = carrier(join(profileDir('web'), 'node_modules', 'carrier'), '')
+    expect(declaredBundlePatchFiles(dir)).toEqual([])
+  })
+
+  it('treats an unreadable manifest and an absent package as no declaration', () => {
+    const dir = join(profileDir('web'), 'node_modules', 'carrier')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), '{broken')
+    expect(declaredBundlePatchFiles(dir)).toEqual([])
+    expect(declaredBundlePatchFiles(join(dir, 'absent'))).toEqual([])
   })
 })
 

@@ -882,41 +882,60 @@ export function parsePatchRows(text: string): { names: string[]; ids: string[]; 
   return { names, ids, insertedIds }
 }
 
-/** Rows of the patch a package DECLARES through `dsh.bundle.patch`. */
 /**
- * Where a package's bundle patch lives, according to the package itself.
+ * Where a package's bundle patches live, according to the package itself.
  *
  * `dsh.bundle.patch` is the package's own declaration and the only place the
- * answer is written down: the path may be a subdirectory (`aegis` declares
- * `./extensions/dsh/cordis.patch.yml`), not just the package root. Callers
- * that assumed the root file made a plugin with a declared patch look like
- * one with none (#646) — so the resolution rule lives here, once.
+ * answer is written down. The host accepts a string (one file) or an ordered
+ * array of files — official dsh-web-app ships five — and composes them in
+ * order (`bundlePatchFiles` in dsh-app-boot). The market's read side hands
+ * down no verdict, so an array contributes its string items in order and an
+ * unreadable manifest or a declaration that is neither string nor array
+ * answers none instead of throwing (#792) — the same tolerance check.ts's
+ * `declaredList` applies to the boot check (#676). The path may name a
+ * subdirectory (`aegis` declares `./extensions/dsh/cordis.patch.yml`), not
+ * just the package root — callers that assumed the root file made a plugin
+ * with a declared patch look like one with none (#646) — so the resolution
+ * rule lives here, once.
  *
  * @param dir - the installed package directory.
- * @returns the declared patch file's path, or null when the manifest names
- *   none (or the manifest cannot be read).
+ * @returns the declared patch files' paths in declaration order, empty when
+ *   the manifest names none (or cannot be read).
  */
-export function declaredBundlePatchFile(dir: string): string | null {
+export function declaredBundlePatchFiles(dir: string): string[] {
   try {
     const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
       dsh?: { bundle?: { patch?: unknown } }
     }
     const declared = manifest.dsh?.bundle?.patch
-    if (typeof declared !== 'string' || declared === '') return null
-    return join(dir, declared)
+    let files: string[] = []
+    if (typeof declared === 'string') {
+      files = declared === '' ? [] : [declared]
+    } else if (Array.isArray(declared)) {
+      files = declared.filter((file): file is string => typeof file === 'string')
+    }
+    return files.map(file => join(dir, file))
   } catch {
-    return null
+    return []
   }
 }
 
 function readBundlePatchRows(dir: string): { names: string[]; ids: string[]; insertedIds: string[] } {
-  const empty = { names: [], ids: [], insertedIds: [] }
-  const file = declaredBundlePatchFile(dir)
-  if (file === null) return empty
   try {
-    return parsePatchRows(readFileSync(file, 'utf8'))
+    const rows: { names: string[]; ids: string[]; insertedIds: string[] } = { names: [], ids: [], insertedIds: [] }
+    for (const file of declaredBundlePatchFiles(dir)) {
+      const parsed = parsePatchRows(readFileSync(file, 'utf8'))
+      rows.names.push(...parsed.names)
+      rows.ids.push(...parsed.ids)
+      rows.insertedIds.push(...parsed.insertedIds)
+    }
+    return rows
   } catch {
-    return empty
+    // All or nothing: one unreadable file voids the whole declaration. The
+    // host's loadOverlayPatches throws on a missing overlay file and
+    // loadProfileDirectory then skips the ENTIRE bundle — a partially
+    // applied list would judge a package the host never loads.
+    return { names: [], ids: [], insertedIds: [] }
   }
 }
 
