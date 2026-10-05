@@ -1374,6 +1374,48 @@ describe('Desktop host discovery (#405)', () => {
     },
   )
 
+  describe('the runtime one `dsh/` level inside app.asar (#778)', () => {
+    // 0.2.0-rc.2 embeds the whole runtime in a `dsh/` subdirectory INSIDE the
+    // asar. The asar's own node_modules holds eight shared libraries and none
+    // of the host, so probing the root alone found no host and every consumer
+    // read "not locatable": hostVersion null, "update to a compatible version"
+    // unable to pick anything, and the exported log's first line wrong.
+    const desktop = (applicationRoot: string) => {
+      const resources = join(tmp, `resources-nested-${applicationRoot}`)
+      const host = writePackage(join(resources, applicationRoot, 'dsh'), '@deepseek-ai/dsh', {
+        name: '@deepseek-ai/dsh',
+        version: '0.2.0-rc.2',
+      })
+      Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true })
+      return { resources, host }
+    }
+
+    it.each(['app.asar.unpacked', 'app.asar', 'app'])('finds the host under resources/%s/dsh', applicationRoot => {
+      const { host } = desktop(applicationRoot)
+      expect(dshHostInfo(join(tmp, 'electron-entry', 'main.js'))).toEqual({ version: '0.2.0-rc.2', directory: host })
+      expect(findDshInstallDir(join(tmp, 'electron-entry', 'main.js'))).toBe(host)
+    })
+
+    it('still prefers the layout that already worked when both exist', () => {
+      // The nested candidate FOLLOWS its root, so a build that carries a host at
+      // the root keeps answering with it.
+      const { resources } = desktop('app.asar')
+      const flat = writePackage(join(resources, 'app.asar'), '@deepseek-ai/dsh', {
+        name: '@deepseek-ai/dsh',
+        version: '0.1.1-rc.2',
+      })
+      expect(dshHostInfo(join(tmp, 'electron-entry', 'main.js'))).toEqual({ version: '0.1.1-rc.2', directory: flat })
+    })
+
+    it('does not trust a nested directory just because it exists — identity still decides', () => {
+      // The nested level adds a place to look, not a thing to believe.
+      const resources = join(tmp, 'resources-nested-wrong')
+      writePackage(join(resources, 'app.asar', 'dsh'), '@deepseek-ai/dsh', { name: 'not-the-dsh-host', version: '9.9.9' })
+      Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true })
+      expect(dshHostInfo(join(tmp, 'electron-entry', 'main.js'))).toBeNull()
+    })
+  })
+
   it('keeps CLI-entry discovery ahead of the Desktop fallback', () => {
     const cliInstall = pdir('cli-install')
     mkdirSync(join(cliInstall, 'bin'), { recursive: true })
