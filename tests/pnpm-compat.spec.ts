@@ -188,6 +188,55 @@ describe('classifyPnpmFailure', () => {
     expect(generic?.message).not.toContain('（）')
   })
 
+  it('separates a profile file from a package directory when Windows refuses the rename (#786)', () => {
+    // Verbatim from the reporter's own profile, pnpm 11.7.0. pnpm writes
+    // package.json and pnpm-lock.yaml through write-file-atomic, whose temp
+    // name is `<file>.<hash>` — and which renames ONCE with no retry. Defender
+    // or the indexer touching the file for an instant therefore fails the whole
+    // run, after pnpm has already built and linked the new commit.
+    const failed = classifyPnpmFailure(
+      String.raw`[EPERM] EPERM: operation not permitted, rename 'C:\Users\Loner\.dsh\profiles\desktop\pnpm-lock.yaml.3015012533' -> 'C:\Users\Loner\.dsh\profiles\desktop\pnpm-lock.yaml'`,
+    )
+    expect(failed?.code).toBe('profile-file-locked')
+    // The plugin is NOT what is locked, so the "quit DSH" advice is wrong here
+    // and the failure clears on a plain retry.
+    expect(failed?.recoverable).toBe(true)
+    expect(failed?.message).toContain('pnpm-lock.yaml')
+    expect(failed?.message).not.toContain('quit DeepSeek Harness')
+    expect(failed?.message).not.toContain('退出 DeepSeek Harness')
+    // Never claims a package was named: none was.
+    expect(failed?.pkg).toBeUndefined()
+
+    // package.json and pnpm-workspace.yaml are the same momentary-holder case.
+    expect(classifyPnpmFailure(
+      String.raw`EPERM: operation not permitted, rename 'C:\p\web\package.json.1621249915' -> 'C:\p\web\package.json'`,
+    )?.code).toBe('profile-file-locked')
+
+    // …but a PACKAGE directory still gets the #389 answer, including pnpm's
+    // `<name>_tmp_<pid>_<n>` staging shape and a bare ERR_PNPM_EPERM.
+    expect(classifyPnpmFailure(
+      String.raw`EPERM: operation not permitted, rename 'C:\p\web\node_modules\dsh-passwords_tmp_38728_10' -> 'C:\p\web\node_modules\dsh-passwords'`,
+    )?.code).toBe('windows-file-locked')
+    expect(classifyPnpmFailure('ERR_PNPM_EPERM: something the reporter reworded')?.code)
+      .toBe('windows-file-locked')
+  })
+
+  it('reads the profile-file lock out of pnpm\'s ndjson reporter too (#786)', () => {
+    // Production mutating commands run with --reporter=ndjson, where the OS
+    // message arrives JSON-escaped: every backslash is doubled, so a pattern
+    // tested only against pretty output silently matches nothing.
+    const failed = classifyPnpmFailure(JSON.stringify({
+      name: 'pnpm',
+      level: 'error',
+      err: {
+        code: 'EPERM',
+        message: String.raw`EPERM: operation not permitted, rename 'C:\Users\Loner\.dsh\profiles\desktop\pnpm-lock.yaml.3015012533' -> 'C:\Users\Loner\.dsh\profiles\desktop\pnpm-lock.yaml'`,
+      },
+    }))
+    expect(failed?.code).toBe('profile-file-locked')
+    expect(failed?.recoverable).toBe(true)
+  })
+
   it('names the tarball dependency whose lockfile entry has no integrity (#367)', () => {
     const failed = classifyPnpmFailure(`[ERR_PNPM_MISSING_TARBALL_INTEGRITY] Cannot install package
 "dsh-think-translate@https://gh-proxy.com/https://codeload.github.com/UncleK/dsh-think-translate/tar.gz/ba71a9bb88f52bc7bbf42225cfb69f7ef8d16900": its lockfile entry has no "integrity" field,

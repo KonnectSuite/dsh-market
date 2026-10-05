@@ -48,6 +48,7 @@ export interface PnpmFailure {
     | 'ignored-builds' | 'git-prepare-not-allowed' | 'git-prepare-failed' | 'tarball-url-mismatch'
     | 'fetch-404' | 'no-matching-version' | 'transient-network' | 'fetch-timeout'
     | 'unexpected-store' | 'patch-failed' | 'unused-patch' | 'missing-tarball-integrity' | 'windows-file-locked'
+    | 'profile-file-locked'
     | 'pnpm-unusable' | 'missing-local-dependency' | 'unparseable-build-key' | 'native-oom' | 'ssh-auth-failed'
   /** Bilingual, actionable message shown to the user instead of the raw wall of text. */
   message: string
@@ -493,6 +494,31 @@ export function classifyPnpmFailure(output: string, exitCode?: number | null): P
         : `插件声明的一个依赖版本范围在 registry 上没有可满足的版本${zh}，通常是该版本被弃用或从未发布 / a dependency of this plugin declared a version range with no matching release on the registry${en} — the range resolves to nothing (withdrawn or never published)`,
     }
   }
+  // #786 follow-up: pnpm could not replace one of the PROFILE's own files —
+  // `package.json` or `pnpm-lock.yaml` — not a package directory.
+  //
+  // pnpm writes both through its bundled `write-file-atomic`, which does ONE
+  // rename and no retry (measured on the bundled 11.7.0: the temp name is
+  // `<file>.<hash>`, e.g. `pnpm-lock.yaml.3015012533`). Any momentary holder —
+  // Defender scanning the just-written file, the Windows indexer, an editor —
+  // fails the entire run. Measured on the reporter's own profile: 4 identical
+  // `add` runs, the 4th failed this way and an immediate 5th succeeded.
+  //
+  // This must be answered BEFORE the package-directory branch below, whose
+  // pattern is broad enough to swallow it: that branch blames the running host
+  // for holding the plugin's files open and tells the user to quit DSH, which
+  // is wrong here (nothing about the plugin is locked) and is the most
+  // expensive advice available for a failure that a plain retry clears.
+  // `recoverable: true` is what lets withHoistRecovery retry it automatically.
+  if (/(?:ERR_PNPM_)?EPERM[^\n]*rename[^\n]*[\\/](?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)\.\d+/i.test(
+    withDecodedPnpmDiagnostics(output),
+  )) {
+    return {
+      code: 'profile-file-locked',
+      recoverable: true,
+      message: 'pnpm 替换 profile 自己的文件（package.json / pnpm-lock.yaml）时被 Windows 拒绝了一下——通常是杀毒软件或索引服务正好在读这个刚写完的文件。插件本身没有被占用，重试即可；市场会自动重试一次 / Windows briefly refused pnpm\'s replacement of one of the profile\'s own files (package.json / pnpm-lock.yaml) — usually antivirus or the search indexer reading the file pnpm had just written. Nothing about the plugin is locked; a retry clears it, and the market retries once automatically',
+    }
+  }
   // #389 by @qq1054435284: on Windows, pnpm stages the new version in a
   // sibling `<name>_tmp_<pid>_<n>` directory and renames it over the old one.
   // Windows refuses that rename while any file underneath the target is open,
@@ -521,6 +547,15 @@ export function classifyPnpmFailure(output: string, exitCode?: number | null): P
   // pnpm 12 (the native CLI) says it differently and carries no ERR_PNPM_
   // code: `failed to remove existing directory "…" prior to swap: …` — same
   // refused swap over the open directory, so the same answer.
+  //
+  // A Windows EPERM on a PROFILE file is NOT this case, and is answered
+  // separately just above. pnpm's own write-file-atomic performs one rename
+  // with no retry (measured on the bundled 11.7.0), so an antivirus scan, a
+  // file indexer, or any process touching pnpm-lock.yaml for an instant fails
+  // the whole run — after pnpm has already built and linked the new commit.
+  // Reporting that as "the running host holds the plugin's files open" gave the
+  // worst available advice (quit DSH), because the interference is momentary
+  // and the next attempt succeeds.
   if (/ERR_PNPM_EPERM|EPERM: operation not permitted, rename|failed to remove existing directory .* prior to swap/i.test(output)) {
     // Read through the NDJSON reporter like the integrity classifier does:
     // in production this arrives JSON-escaped, so every separator is doubled
