@@ -208,6 +208,89 @@ describe('setEntryDisabled', () => {
   })
 })
 
+describe('toggle log lines say what actually happened (#788)', () => {
+  /**
+   * The report: one stuck entry produced the same three lines every minute for
+   * a day, and each of them was wrong about the situation. The entry WAS
+   * matched; its update threw; the fiber was still up. The log said "-> off:
+   * fiber=true" and, from a different branch, "no loader entry matched" — which
+   * pointed the reporter at an entry-naming bug (#619) that was not there.
+   * None of this changes what setEntryDisabled returns or what boot replays;
+   * it only stops the log from contradicting the state it describes.
+   */
+  const logged = async (run: () => Promise<unknown>): Promise<string[]> => {
+    const log = await import('../src/log.ts')
+    const spy = vi.spyOn(log, 'logEvent').mockImplementation(() => undefined)
+    try {
+      await run()
+      return spy.mock.calls.map(([level, event, detail]) => `${level} ${event} ${detail}`)
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  /** An entry whose update always throws, like one wedged behind pending work. */
+  const failingEntry = (error: Error): LoaderEntry => ({
+    options: { id: 'pet', name: '@linxin666/dsh-pet' },
+    fiber: {},
+    update: async () => { throw error },
+  })
+
+  it('does not say "no loader entry matched" when an entry matched and its update failed', async () => {
+    const entry = failingEntry(new Error('boom'))
+    const manager = createThemeManager(hostWith([entry]), 'web', new Set())
+    const lines = await logged(async () => {
+      expect(await manager.setEntryDisabled('@linxin666/dsh-pet', true)).toBe(false)
+    })
+    expect(lines.join('\n')).not.toContain('no loader entry matched')
+    expect(lines.join('\n')).toContain('entry update failed — boom')
+  })
+
+  it('does not write "-> off" for an update that threw, with the fiber still up', async () => {
+    const entry = failingEntry(new Error('boom'))
+    const manager = createThemeManager(hostWith([entry]), 'web', new Set())
+    const lines = await logged(() => manager.setEntryDisabled('@linxin666/dsh-pet', true))
+    expect(lines.join('\n')).not.toMatch(/-> off/)
+    expect(entry.fiber).toBeDefined()
+  })
+
+  it('still says "no loader entry matched" when nothing was selected, and "-> off" when it landed', async () => {
+    const empty = createThemeManager(hostWith([]), 'web', new Set())
+    expect((await logged(() => empty.setEntryDisabled('ghost', true))).join('\n')).toContain('ghost: no loader entry matched')
+
+    const { entry } = makeEntry({ id: 'pet', name: '@linxin666/dsh-pet' })
+    const ok = createThemeManager(hostWith([entry]), 'web', new Set())
+    expect((await logged(() => ok.setEntryDisabled('@linxin666/dsh-pet', true))).join('\n'))
+      .toContain('@linxin666/dsh-pet -> off: fiber=false')
+  })
+
+  it('does not log a second failure for the update that is still pending, but keeps the first timeout', async () => {
+    // First call: the update never settles within the wait, so it logs the
+    // timeout once. Second call (the next boot replay / retry) bumps into the
+    // still-pending operation — that is the SAME problem, not a new one.
+    vi.useFakeTimers()
+    try {
+      const entry: LoaderEntry = {
+        options: { id: 'pet', name: '@linxin666/dsh-pet' },
+        fiber: {},
+        update: () => new Promise<void>(() => { /* never settles */ }),
+      }
+      const manager = createThemeManager(hostWith([entry]), 'web', new Set())
+      const lines = await logged(async () => {
+        const first = manager.setEntryDisabled('@linxin666/dsh-pet', true)
+        await vi.advanceTimersByTimeAsync(11_000)
+        await first
+        await manager.setEntryDisabled('@linxin666/dsh-pet', true)
+      })
+      const text = lines.join('\n')
+      expect(text).toContain('did not settle within 10s')
+      expect(text).not.toContain('previous operation is still pending')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('strict entry enable (#575, #582)', () => {
   it('restores every touched entry if a later entry rejects, without touching other packages', async () => {
     const entries = [0, 1].map(i => {
