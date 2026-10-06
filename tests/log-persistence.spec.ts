@@ -50,13 +50,19 @@ describe('persistent log sink', () => {
     // a process. Measured before the fix: 20k events grew the file to 3.2 MB.
     // A retry loop is precisely the case that logs hardest and never restarts,
     // so the process that most needs this log is the one that would blow it up.
+    //
+    // 2100 events of 205 bytes cross the cap exactly twice (near 1280 and
+    // 1920; a third would need about 2560): once to prove the trim runs while
+    // the process lives, once more to prove a trimmed file keeps holding it.
+    // Every event is its own open/write/close, so more events only slow the
+    // test down on a busy machine (#801).
     configurePersistentLog(logFile)
-    for (let i = 0; i < 6000; i++) logEvent('error', 'install', `${'x'.repeat(120)} ${i}`)
+    for (let i = 0; i < 2100; i++) logEvent('error', 'install', `${'x'.repeat(120)} ${i}`)
     expect(statSync(logFile).size).toBeLessThanOrEqual(256 * 1024)
     // Still usable, and still holding the NEWEST events rather than the oldest.
     const lines = readPersistentLog(logFile)
     expect(lines.length).toBeGreaterThan(0)
-    expect(JSON.parse(lines[lines.length - 1]!).detail).toContain('5999')
+    expect(JSON.parse(lines[lines.length - 1]!).detail).toContain('2099')
   })
 
   it('keeps exportLogs readable with and without prior sessions', () => {
