@@ -4946,6 +4946,42 @@ describe('uninstall flow', () => {
     expect((await bed.dispatch('POST', '/dsh-market/uninstall', { name: 'ghost' })).status).toBe(400)
   })
 
+  it('clears the patch rows an uninstall would otherwise leave behind (#799)', async () => {
+    // The reporter's sequence: the plugin was switched off — which writes a
+    // `disabled: true` row into the profile's own cordis.patch.yml — and
+    // uninstalled 16 seconds later. The row id is named by the plugin's own
+    // bundle patch, and the remove deletes the package BEFORE the cleanup
+    // reads it, so `rowIdsForPackage` came back empty and the row outlived
+    // the package as a boot-time orphan.
+    fake.repos['github:o/dsh-patchy'] = {
+      name: 'dsh-patchy',
+      manifest: { dsh: { bundle: { patch: './cordis.patch.yml' } }, main: 'lib/index.js' },
+      artifacts: ['lib/index.js', 'cordis.patch.yml'],
+    }
+    await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-patchy' })
+    hot.mounts = [] // bundle-layer: loaded by the loader, never a hot mount
+    // The fake install writes an EMPTY patch artifact; give it the real row.
+    // The row id deliberately DIFFERS from the package name: an entry named
+    // after the package would still be found after the remove, and the test
+    // would then pass without the fix.
+    writeFileSync(
+      join(profileDir('web'), 'node_modules', 'dsh-patchy', 'cordis.patch.yml'),
+      "- insert:\n    - id: dsh-patchy-row\n      name: 'dsh-patchy'\n",
+    )
+    const userPatch = join(profileDir('web'), 'cordis.patch.yml')
+
+    const off = await bed.dispatch('POST', '/dsh-market/toggle', { name: 'dsh-patchy', enabled: false })
+    expect(off.status).toBe(200)
+    expect(readFileSync(userPatch, 'utf8')).toContain('- id: dsh-patchy-row\n  disabled: true\n')
+
+    const r = await bed.dispatch('POST', '/dsh-market/uninstall', { name: 'dsh-patchy' })
+
+    expect(r.status).toBe(200)
+    // The package is gone, so a row left behind names nothing that can ever
+    // mount again.
+    expect(readFileSync(userPatch, 'utf8')).not.toContain('dsh-patchy-row')
+  })
+
   it('removes the dangling host bridge link a Desktop boot projected for the plugin (#662)', async () => {
     fake.npm['dsh-loop'] = { latest: '1.0.0', versions: { '1.0.0': { manifest: { dsh: {}, main: 'lib/index.js' }, artifacts: ['lib/index.js'] } } }
     // A flat-layout Desktop deployment: its pnpm-managed node_modules is
