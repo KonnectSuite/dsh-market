@@ -383,13 +383,17 @@ export function corePackageNames(dshInstallDir: string | null): Set<string> {
     // everything under @deepseek-ai whose bare name starts with dsh or cordis,
     // plus the app package itself.
     //
-    // `dshHostInfo()` answers either a PACKAGE directory (CLI layout,
-    // `<prefix>/node_modules/@deepseek-ai/dsh`) or a flat Desktop deployment
-    // root — never a constant "installation root". Splicing `node_modules`
-    // onto whichever arrived only happened to work for the flat shape; the
-    // CLI shape landed two levels deep, readdirSync threw, and the curated
-    // seed silently stood in for the real inventory (#676: every package the
-    // host ships that the seed lacks became a fresh "will fail to boot").
+    // `dshHostInfo()` answers either a PACKAGE directory (the CLI layout
+    // `<prefix>/node_modules/@deepseek-ai/dsh`, and the #778 nested form
+    // `<resources>/app.asar/dsh/node_modules/@deepseek-ai/dsh`) or a flat
+    // Desktop deployment root — never a constant "installation root".
+    // Splicing `node_modules` onto whichever arrived only happened to work
+    // for the flat shape. For a package directory the splice landed two
+    // levels deep and readdirSync threw, so the curated seed silently stood
+    // in for the real inventory — and when the host package carries its own
+    // nested `@deepseek-ai` scope (pnpm isolated trees), it read that
+    // truncated subset instead (#676: every package the real inventory has
+    // and the answer lacked became a fresh "will fail to boot").
     // hostNodeModulesRoot() already derives the shared root from both shapes.
     for (const entry of readdirSync(join(hostNodeModulesRoot(dshInstallDir), '@deepseek-ai'), { withFileTypes: true })) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
