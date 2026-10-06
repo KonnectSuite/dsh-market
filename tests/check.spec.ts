@@ -486,6 +486,31 @@ describe('user patch package resolution (#205)', () => {
     expect(resolutionErrors(report.summary.errors)).toEqual([])
   })
 
+  it('accepts a host package when the located install is the CLI package directory (#676)', () => {
+    // hmtime's report: `findDshInstallDir()` located the host fine, but the
+    // directory it answered was the package directory
+    // `<app>/node_modules/@deepseek-ai/dsh`. corePackageNames spliced
+    // `node_modules/@deepseek-ai` onto THAT, the readdir threw two levels
+    // deep, the curated seed stood, and a user-patch insert of a package the
+    // host genuinely ships read as fatal. Same fixture as the #676 case
+    // above except the install dir carries the CLI layout — the shape
+    // production hands this function every day.
+    const dir = pdir()
+    const prefix = join(tmp, 'cli-install')
+    writeProfile(dir, { name: 'web-profile', dependencies: {} })
+    // writePackage puts the manifest under <prefix>/node_modules/<name>, so
+    // this yields exactly dshHostInfo's CLI answer: the package directory.
+    const dshInstall = writePackage(prefix, '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh' })
+    writeLoadablePackage(prefix, '@deepseek-ai/dsh-agent-preset')
+    writeFileSync(join(dir, 'cordis.patch.yml'), dump([
+      { insert: [{ id: 'preset-standard', name: '@deepseek-ai/dsh-agent-preset' }] },
+    ]))
+
+    const report = analyzeProfile(dir, { dshInstallDir: dshInstall, homeDir: join(tmp, 'empty-home') })
+
+    expect(resolutionErrors(report.summary.errors)).toEqual([])
+  })
+
   it('does not call confirmed app.asar host packages missing profile dependencies', () => {
     const dir = pdir()
     const dshInstall = join(tmp, 'resources', 'app.asar', 'dsh')
@@ -2078,5 +2103,25 @@ describe('corePackageNames', () => {
     expect(core.has('@deepseek-ai/dsh-tools')).toBe(true)
     expect(core.has('@deepseek-ai/dsh-llm')).toBe(true)
     expect(core.has('@deepseek-ai/dsh')).toBe(true)
+  })
+
+  it('reads the inventory when dshHostInfo answers the CLI PACKAGE directory (#676)', () => {
+    // `findDshInstallDir()` hands corePackageNames whatever dshHostInfo()
+    // found: for a CLI install that is the host PACKAGE directory
+    // `<prefix>/node_modules/@deepseek-ai/dsh`, not `<prefix>`. Splicing
+    // `node_modules/@deepseek-ai` onto it landed two levels too deep, the
+    // readdir threw, and the curated seed silently replaced the real
+    // inventory — every host-shipped name the seed lacked read as "not
+    // installed — the profile will fail to boot". The only existing fixture
+    // passed the deployment root, the one shape where the old splice
+    // happened to work; this is the shape production actually passes.
+    const prefix = join(tmp, 'cli-install')
+    const hostPackage = writePackage(prefix, '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh' })
+    writePackage(prefix, '@deepseek-ai/dsh-agent-preset', { name: '@deepseek-ai/dsh-agent-preset', version: '0.1.7-alpha.1' })
+
+    const core = corePackageNames(hostPackage)
+    expect(core.has('@deepseek-ai/dsh-agent-preset')).toBe(true) // real inventory, not the seed
+    expect(core.has('@deepseek-ai/dsh')).toBe(true) // package manifest name
+    expect(core.has('@deepseek-ai/dsh-llm')).toBe(true) // curated seed still stands
   })
 })

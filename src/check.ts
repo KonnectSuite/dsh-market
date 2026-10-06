@@ -32,6 +32,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { JSON_SCHEMA, Type, load } from 'js-yaml'
 import { desktopApplicationRoots, findDshInstallDir } from './dsh-install.ts'
 import { resolveDshHome } from './home-paths.ts'
+import { hostNodeModulesRoot } from './install.ts'
 import { INBOX_BUNDLES, readBundleRules, suggestOrder, validateOrder } from './order.ts'
 
 // Electron's app.asar packages can be loadable by the host while invisible to
@@ -381,7 +382,16 @@ export function corePackageNames(dshInstallDir: string | null): Set<string> {
     // The install's own node_modules is the authoritative host-core inventory:
     // everything under @deepseek-ai whose bare name starts with dsh or cordis,
     // plus the app package itself.
-    for (const entry of readdirSync(join(dshInstallDir, 'node_modules', '@deepseek-ai'), { withFileTypes: true })) {
+    //
+    // `dshHostInfo()` answers either a PACKAGE directory (CLI layout,
+    // `<prefix>/node_modules/@deepseek-ai/dsh`) or a flat Desktop deployment
+    // root — never a constant "installation root". Splicing `node_modules`
+    // onto whichever arrived only happened to work for the flat shape; the
+    // CLI shape landed two levels deep, readdirSync threw, and the curated
+    // seed silently stood in for the real inventory (#676: every package the
+    // host ships that the seed lacks became a fresh "will fail to boot").
+    // hostNodeModulesRoot() already derives the shared root from both shapes.
+    for (const entry of readdirSync(join(hostNodeModulesRoot(dshInstallDir), '@deepseek-ai'), { withFileTypes: true })) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
       if (/^(?:dsh|cordis)/.test(entry.name)) names.add(`@deepseek-ai/${entry.name}`)
     }
