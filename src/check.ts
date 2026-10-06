@@ -32,6 +32,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { JSON_SCHEMA, Type, load } from 'js-yaml'
 import { desktopApplicationRoots, findDshInstallDir } from './dsh-install.ts'
 import { resolveDshHome } from './home-paths.ts'
+import { hostNodeModulesRoot } from './install.ts'
 import { INBOX_BUNDLES, readBundleRules, suggestOrder, validateOrder } from './order.ts'
 
 // Electron's app.asar packages can be loadable by the host while invisible to
@@ -381,7 +382,20 @@ export function corePackageNames(dshInstallDir: string | null): Set<string> {
     // The install's own node_modules is the authoritative host-core inventory:
     // everything under @deepseek-ai whose bare name starts with dsh or cordis,
     // plus the app package itself.
-    for (const entry of readdirSync(join(dshInstallDir, 'node_modules', '@deepseek-ai'), { withFileTypes: true })) {
+    //
+    // `dshHostInfo()` answers either a PACKAGE directory (the CLI layout
+    // `<prefix>/node_modules/@deepseek-ai/dsh`, and the #778 nested form
+    // `<resources>/app.asar/dsh/node_modules/@deepseek-ai/dsh`) or a flat
+    // Desktop deployment root — never a constant "installation root".
+    // Splicing `node_modules` onto whichever arrived only happened to work
+    // for the flat shape. For a package directory the splice landed two
+    // levels deep and readdirSync threw, so the curated seed silently stood
+    // in for the real inventory — and when the host package carries its own
+    // nested `@deepseek-ai` scope (pnpm isolated trees), it read that
+    // truncated subset instead (#676: every package the real inventory has
+    // and the answer lacked became a fresh "will fail to boot").
+    // hostNodeModulesRoot() already derives the shared root from both shapes.
+    for (const entry of readdirSync(join(hostNodeModulesRoot(dshInstallDir), '@deepseek-ai'), { withFileTypes: true })) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
       if (/^(?:dsh|cordis)/.test(entry.name)) names.add(`@deepseek-ai/${entry.name}`)
     }
