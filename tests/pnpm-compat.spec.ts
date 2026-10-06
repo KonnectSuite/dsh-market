@@ -222,10 +222,23 @@ describe('classifyPnpmFailure', () => {
     expect(failed?.code).toBe('profile-file-locked')
     // The plugin is NOT what is locked, so the "quit DSH" advice is wrong here
     // and the failure clears on a plain retry.
-    expect(failed?.recoverable).toBe(true)
+    //
+    // NOT marked recoverable, like the other same-argv retries
+    // (`transient-network`, `fetch-timeout`): the flag means "re-running
+    // `pnpm install` is the documented recovery", and nothing reads it to
+    // decide a retry — `withHoistRecovery` keys on this code. Claiming it here
+    // would invite a rebuild of `node_modules` over a one-file rename.
+    expect(failed?.recoverable).toBe(false)
     expect(failed?.message).toContain('pnpm-lock.yaml')
     expect(failed?.message).not.toContain('quit DeepSeek Harness')
     expect(failed?.message).not.toContain('退出 DeepSeek Harness')
+    // `profile` is the market's own word for an internal concept, and the
+    // retry has ALREADY run by the time this text is shown (install.ts
+    // composes it after the recovery chain), so promising one would leave the
+    // reader waiting for something that already happened.
+    expect(failed?.message).not.toContain('profile')
+    expect(failed?.message).toContain('已经自动重试过一次')
+    expect(failed?.message).toContain('already retried once')
     // Never claims a package was named: none was.
     expect(failed?.pkg).toBeUndefined()
 
@@ -234,6 +247,21 @@ describe('classifyPnpmFailure', () => {
       String.raw`EPERM: operation not permitted, rename 'C:\p\web\package.json.1621249915' -> 'C:\p\web\package.json'`,
     )?.code).toBe('profile-file-locked')
 
+    // …and so is the lockfile pnpm keeps INSIDE node_modules. `writeLockfiles`
+    // writes it through the same write-file-atomic, in the same `Promise.all`
+    // as the profile's own lockfile (pnpm 11.7.0, both branches), so the temp
+    // name `…\.pnpm\lock.yaml.<hash>` fails the run identically. Answering it
+    // as a package directory would roll the profile's lockfile back over a
+    // node_modules that already holds the new build — the desync this branch
+    // exists to prevent.
+    const inner = classifyPnpmFailure(
+      String.raw`[EPERM] EPERM: operation not permitted, rename 'C:\Users\Loner\.dsh\profiles\desktop\node_modules\.pnpm\lock.yaml.3015012533' -> 'C:\Users\Loner\.dsh\profiles\desktop\node_modules\.pnpm\lock.yaml'`,
+    )
+    expect(inner?.code).toBe('profile-file-locked')
+    expect(inner?.recoverable).toBe(false)
+    // The inner lockfile is not a package name either.
+    expect(inner?.pkg).toBeUndefined()
+
     // …but a PACKAGE directory still gets the #389 answer, including pnpm's
     // `<name>_tmp_<pid>_<n>` staging shape and a bare ERR_PNPM_EPERM.
     expect(classifyPnpmFailure(
@@ -241,6 +269,12 @@ describe('classifyPnpmFailure', () => {
     )?.code).toBe('windows-file-locked')
     expect(classifyPnpmFailure('ERR_PNPM_EPERM: something the reporter reworded')?.code)
       .toBe('windows-file-locked')
+    // A `lock.yaml` somewhere that is NOT the profile's virtual store stays
+    // with the package-directory answer: the pattern must not be loosened into
+    // "any lock.yaml".
+    expect(classifyPnpmFailure(
+      String.raw`EPERM: operation not permitted, rename 'C:\p\web\some-pkg\lock.yaml.123' -> 'C:\p\web\some-pkg\lock.yaml'`,
+    )?.code).toBe('windows-file-locked')
   })
 
   it('reads the profile-file lock out of pnpm\'s ndjson reporter too (#786)', () => {
@@ -256,7 +290,20 @@ describe('classifyPnpmFailure', () => {
       },
     }))
     expect(failed?.code).toBe('profile-file-locked')
-    expect(failed?.recoverable).toBe(true)
+    expect(failed?.recoverable).toBe(false)
+
+    // Same shape for the inner virtual-store lockfile, which only exists in
+    // the escaped form on this path.
+    const inner = classifyPnpmFailure(JSON.stringify({
+      name: 'pnpm',
+      level: 'error',
+      err: {
+        code: 'EPERM',
+        message: String.raw`EPERM: operation not permitted, rename 'C:\Users\Loner\.dsh\profiles\desktop\node_modules\.pnpm\lock.yaml.3015012533' -> 'C:\Users\Loner\.dsh\profiles\desktop\node_modules\.pnpm\lock.yaml'`,
+      },
+    }))
+    expect(inner?.code).toBe('profile-file-locked')
+    expect(inner?.recoverable).toBe(false)
   })
 
   it('names the tarball dependency whose lockfile entry has no integrity (#367)', () => {
