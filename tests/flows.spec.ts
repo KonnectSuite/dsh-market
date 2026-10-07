@@ -353,7 +353,20 @@ vi.mock('../src/dsh-cli.ts', () => {
       const repo = fake.repos[target] ?? (hash === -1 ? undefined : fake.repos[repoKey])
       if (repo === undefined) return { exitCode: 1, timedOut: false, stdout: '', stderr: `fake dsh: unknown repo ${target}`, cancelled: false }
       const def = commit !== undefined ? repo.byCommit?.[commit] : undefined
-      writeDep(repo.name, target)
+      // Real pnpm keeps the SPELLING already in the manifest for a floating git
+      // dependency: on 11.7.0 a profile whose dependency reads
+      // `git+https://owner/repo.git` gets that same value back after
+      // `pnpm add github:owner/repo` (#803's report, re-measured here), with the
+      // commit in the lockfile rather than the specifier. That unchanged
+      // specifier is exactly what made the desktop manager's before/after diff
+      // empty and the run fail as `ambiguous-install`. A URL spelling is
+      // therefore written back as it stands, minus any full-SHA fragment; a
+      // fresh add and every other spelling keep the target.
+      const existing = readManifest().dependencies?.[repo.name]
+      const existingUrl = typeof existing === 'string' && /^git\+/.test(existing)
+        ? existing.split('#')[0]
+        : null
+      writeDep(repo.name, existingUrl ?? target)
       writePkg(repo.name, def?.manifest ?? repo.manifest, def?.artifacts ?? repo.artifacts)
       const nextCommit = commit ?? repo.lockCommit
       if (nextCommit !== undefined) writeLockCommit(repoKey.replace(/^github:/, ''), nextCommit)
@@ -2990,6 +3003,89 @@ describe('update flow — no npm publishing required', () => {
     // The declaration is back to the floating specifier the user had: the pin
     // exists only for the duration of the run.
     expect(installedSpec('themer')).toBe(gitea)
+    // And the new commit is what landed.
+    expect(readFileSync(join(profileDir('web'), 'pnpm-lock.yaml'), 'utf8')).toContain(NEW)
+  })
+
+  it('makes a GitHub-source update identifiable when the manifest holds pnpm\'s URL spelling (#803)', async () => {
+    // #786's pin covered `target === spec` — the bare remote handed straight
+    // back to pnpm. This shape is one step away from it and was still failing
+    // on 1.66.9: the profile holds the spelling pnpm itself wrote for a GitHub
+    // source, `git+https://owner/repo.git`, while the market sends the
+    // `github:owner/repo` shortcut. The target differs from the specifier, so
+    // no pin was declared — and pnpm nevertheless gives the specifier back as
+    // it stands (measured on 11.7.0, the version DSH Desktop bundles), so the
+    // manager's diff stayed empty and the run died as `ambiguous-install`
+    // AFTER the new commit had been built. The reporter's log has it eight
+    // times across three days.
+    const url = 'git+https://github.com/o/themer.git'
+    const OLD = 'a'.repeat(40)
+    const NEW = 'b'.repeat(40)
+    fake.repos['github:o/themer'] = {
+      name: 'themer',
+      manifest: { name: 'themer', version: '2.0.0', dsh: {}, main: 'index.js' },
+      artifacts: ['index.js'],
+      lockCommit: NEW,
+      byCommit: {
+        [OLD]: { manifest: { name: 'themer', version: '1.0.0', dsh: {}, main: 'index.js' }, artifacts: ['index.js'] },
+      },
+    }
+    const manifestPath = join(profileDir('web'), 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.dependencies = { ...(manifest.dependencies ?? {}), themer: url }
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    mkdirSync(join(profileDir('web'), 'node_modules', 'themer'), { recursive: true })
+    writeFileSync(
+      join(profileDir('web'), 'node_modules', 'themer', 'package.json'),
+      JSON.stringify({ name: 'themer', version: '1.0.0', dsh: {}, main: 'index.js' }),
+    )
+    writeFileSync(join(profileDir('web'), 'node_modules', 'themer', 'index.js'), 'export {}\n')
+    // The commit pnpm recorded for that remote, in the shape it writes for a
+    // github.com URL (the rollback reads whichever the host wrote).
+    writeFileSync(
+      join(profileDir('web'), 'pnpm-lock.yaml'),
+      `lockfileVersion: 9\n  resolution: {tarball: https://codeload.github.com/o/themer/tar.gz/${OLD}}\n`,
+    )
+
+    // The manager's own identification, replayed over the real profile files —
+    // same strict stub as #786's: it throws the shipped error rather than
+    // reporting success, so a run the real host refuses cannot pass here.
+    const manager = {
+      installBundle: async (spec: string) => {
+        const before = JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}
+        const ran = await runDshPlugin('desktop', ['add', spec]) as { exitCode: number; stdout: string; stderr: string }
+        if (ran.exitCode !== 0) {
+          return { application: 'failed', error: ran.stderr, packageResult: { exitCode: ran.exitCode, output: ran.stdout } }
+        }
+        const after = JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}
+        const installed = Object.keys(after).filter(name => before[name] !== after[name])
+        if (installed.length === 0) {
+          installed.push(...Object.keys(after).filter(name => spec === name || spec.startsWith(`${name}@`)))
+        }
+        if (installed.length !== 1 || installed[0] === undefined) {
+          return { application: 'failed', error: 'ambiguous-install', packageResult: { exitCode: 1, output: '' } }
+        }
+        return { application: 'restart-required', packageResult: { exitCode: 0, output: '' } }
+      },
+      removeBundle: async (name: string) => {
+        const ran = await runDshPlugin('desktop', ['remove', name]) as { exitCode: number }
+        return { application: ran.exitCode === 0 ? 'applied' : 'failed', packageResult: { exitCode: ran.exitCode, output: '' } }
+      },
+      cancelInstall: async () => ({ status: 'cancelled' }),
+    }
+    bed.dispose()
+    bed = createTestbed({}, createOfficialDesktopRuntime(() => manager, 'web', profileDir('web')))
+
+    fake.calls = []
+    const updated = await bed.dispatch('POST', '/dsh-market/update', { name: 'themer' })
+
+    expect(updated.status, 'the update must not fail as ambiguous-install').toBe(200)
+    // The host still takes `add`, and it is the shortcut the market sends.
+    expect(fake.calls.at(-1)?.[0]).toBe('add')
+    expect(fake.calls.at(-1)?.[1]).toBe('github:o/themer')
+    // The user's own spelling is what survives the run — the pin exists only
+    // for its duration.
+    expect(installedSpec('themer')).toBe(url)
     // And the new commit is what landed.
     expect(readFileSync(join(profileDir('web'), 'pnpm-lock.yaml'), 'utf8')).toContain(NEW)
   })

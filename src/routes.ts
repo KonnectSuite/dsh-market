@@ -4248,6 +4248,21 @@ sendJson(response, 200, { updates })
             // declaration is unchanged; a failed run restores the manifest from
             // the snapshot above.
             //
+            // `reresolveInPlace` is not the only shape whose diff is empty.
+            // When the manifest holds the spelling pnpm itself wrote for a
+            // GitHub source — `git+https://owner/repo.git` — and the market
+            // sends the `github:owner/repo` shortcut, the target differs from
+            // the specifier but pnpm still gives the specifier back unchanged,
+            // so the host answers `ambiguous-install` again (#803; measured on
+            // pnpm 11.7.0, the version DSH Desktop bundles, against the
+            // reporter's own spec pair). One question covers both: pnpm leaves
+            // the specifier as it was, so the diff the host reads is empty.
+            //
+            // The pin is the market's own write to a foreign pipeline, so it is
+            // scoped to the host that reads the manifest itself. A host that
+            // takes market options lets the market verify its own run, and gets
+            // no extra manifest write.
+            //
             // A `#path:` spec needs the local pin instead of the host's exact
             // rollback target: `gitTargetAtCommit` refuses the `&` that carries
             // a selector beside a commit, because dsh-cli's target grammar has
@@ -4257,7 +4272,9 @@ sendJson(response, 200, { updates })
             const pinValue = gitRollbackTarget ?? (hasGitSubpath && beforeCommit !== null
               ? pinSpecToCommit(spec, beforeCommit)
               : null)
-            const pinnedForIdentification = reresolveInPlace && !inPlaceUpdate
+            const identifiesInstalledByManifestDiff = !marketFlags
+            const pinnedForIdentification = isGit && !restore
+              && identifiesInstalledByManifestDiff
               && pinValue !== null && pinValue !== spec
             if (pinnedForIdentification) {
               declareProfileDependency(config.profile, name, pinValue, activeProfileDir)
