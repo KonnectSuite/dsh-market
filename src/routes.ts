@@ -316,6 +316,29 @@ function blockedBuilds(result: { ignoredBuilds?: unknown; stdout: string; stderr
 }
 
 /**
+ * Whether a FAILED run failed BECAUSE pnpm skipped a build script (#754).
+ *
+ * `blockedBuilds` answers a different question — "did pnpm skip anything" —
+ * and pnpm reports skipped builds for transitive dependencies on almost any
+ * run. So a failure with an unrelated cause (a peer-resolution refusal, a 404,
+ * an OOM) still came back carrying the approve-and-retry banner, and pressing
+ * it re-ran the same command to the same failure. The reporter's case is the
+ * sharp end: the skipped package was a transitive `@types/*` that is not in
+ * the profile and not in the catalog, so approval had nothing to approve and
+ * the button answered `no installed packages given` — while the real cause
+ * (`generation peer validation failed`) was buried under it.
+ *
+ * The classifier already decides this from pnpm's own output, so ask it rather
+ * than pattern-matching a second time. `git-prepare-not-allowed` is the same
+ * refusal for a git dependency, which is the other code the approval path can
+ * clear.
+ */
+function failedOnBlockedBuilds(result: { exitCode: number | null; stdout: string; stderr: string }): boolean {
+  const code = classifyPnpmFailure(`${result.stderr}\n${result.stdout}`, result.exitCode)?.code
+  return code === 'ignored-builds' || code === 'git-prepare-not-allowed'
+}
+
+/**
  * Register the market's HTTP routes.
  * @param host - Acquired webServer + shell services.
  * @param config - Validated market configuration.
@@ -4709,7 +4732,10 @@ sendJson(response, 200, { updates })
             // build-required dep fails the add with ERR_PNPM_IGNORED_BUILDS.
             // Reporting the blocked packages here gives the client the same
             // approve-and-retry banner the install flow has had since #6.
-            const ignoredBuilds = ok || cancelled ? undefined : blockedBuilds(result)
+            // Same rule as the install route (#754): a failure that merely
+            // MENTIONS a skipped build is not a failure ABOUT one, and offering
+            // to approve it sends the user to press a button that cannot help.
+            const ignoredBuilds = ok || cancelled || !failedOnBlockedBuilds(result) ? undefined : blockedBuilds(result)
             if (ok) clearBrokenPlugin(name)
             // A package still installed but no longer in dsh.profile.bundles
             // after this run stops loading and says nothing (#720). The market
@@ -6068,7 +6094,10 @@ sendJson(response, 200, { updates })
             if (ok) clearBrokenPlugin(entry.name)
             logEvent(ok || cancelled ? 'info' : 'error', 'install',
               `${target} exit=${String(result.exitCode)}${result.timedOut ? ' TIMEOUT' : ''}${cancelled ? ' CANCELLED' : ''}${ok ? ` hot=${String(hot)}` : cancelled ? '' : ` err=${failureDetail(result)}`}`)
-            const ignoredBuilds = blockedBuilds(result)
+            // On success a skipped build is a notice (#6); after a FAILURE the
+            // list is what offers the approve-and-retry banner, so it is sent
+            // only when the blocked build IS why the run failed (#754).
+            const ignoredBuilds = ok || cancelled || failedOnBlockedBuilds(result) ? blockedBuilds(result) : undefined
             sendJson(response, ok || cancelled ? 200 : result.busy === true ? 409 : 502, {
               ok,
               cancelled: cancelled || undefined,

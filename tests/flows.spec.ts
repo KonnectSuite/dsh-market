@@ -5525,6 +5525,65 @@ describe('cancel flow (#6)', () => {
   })
 })
 
+describe('the approve-and-retry banner is offered only for the failure it clears (#754)', () => {
+  it('does not offer it when the run failed for another reason, even though pnpm also skipped a build', async () => {
+    // The reporter's shape: the installer refused on a peer-resolution check
+    // while pnpm's output ALSO carried an "Ignored build scripts" line for a
+    // transitive `@types/*` package. The banner was offered anyway, and
+    // pressing it re-ran the same command to the same refusal — the skipped
+    // package is not in the profile and not in the catalog, so approval had
+    // nothing to approve and answered `no installed packages given`.
+    fake.npm['dsh-loop'] = {
+      latest: '1.0.0',
+      versions: { '1.0.0': { manifest: { dsh: {}, main: 'lib/index.js' }, artifacts: ['lib/index.js'] } },
+    }
+    fake.failNextAddStderrOnce = [
+      'Ignored build scripts: @types/retry@0.12.0.',
+      'ERR_PNPM_FETCH_404  GET https://registry.example/@types/retry/-/retry-0.12.0.tgz: Not Found - 404',
+    ].join('\n')
+
+    const failed = await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-loop' })
+
+    expect(failed.status).toBe(502)
+    // No approval affordance for a failure approval cannot clear.
+    expect(failed.json.ignoredBuilds).toBeUndefined()
+    // And the real cause is what the row shows.
+    expect(String(failed.json.error ?? failed.json.stderr)).toContain('404')
+  })
+
+  it('still offers it when the blocked build IS the failure (#69)', async () => {
+    // The other half, pinned so the gate cannot be "never send it": pnpm 11
+    // exits 1 on a skipped build script, and that is the failure the approval
+    // path clears.
+    fake.npm['dsh-loop'] = {
+      latest: '1.0.0',
+      versions: { '1.0.0': { manifest: { dsh: {}, main: 'lib/index.js' }, artifacts: ['lib/index.js'] } },
+    }
+    fake.failNextAddStderrOnce = '[ERR_PNPM_IGNORED_BUILDS]\nIgnored build scripts: dsh-loop@1.0.0.'
+
+    const failed = await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-loop' })
+
+    expect(failed.json.ignoredBuilds).toEqual(['dsh-loop'])
+  })
+
+  it('applies the same rule on the update route (#754)', async () => {
+    fake.npm['dsh-loop'] = {
+      latest: '1.2.0',
+      versions: { '1.0.0': { manifest: { dsh: {}, main: 'lib/index.js' }, artifacts: ['lib/index.js'] } },
+    }
+    await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-loop' })
+    fake.failNextAddStderrOnce = [
+      'Ignored build scripts: @types/retry@0.12.0.',
+      'ERR_PNPM_FETCH_404  GET https://registry.example/@types/retry/-/retry-0.12.0.tgz: Not Found - 404',
+    ].join('\n')
+
+    const failed = await bed.dispatch('POST', '/dsh-market/update', { name: 'dsh-loop' })
+
+    expect(failed.status).toBe(502)
+    expect(failed.json.ignoredBuilds).toBeUndefined()
+  })
+})
+
 describe('build-script approval flow (#6)', () => {
   it('surfaces ignored builds, approve-builds allows only installed packages, and the retry succeeds', async () => {
     fake.npm['dsh-loop'] = {
