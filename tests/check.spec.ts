@@ -1653,6 +1653,95 @@ describe('the installation own overlay layer (#748)', () => {
     expect(report.rows.filter(row => row.layer === 'some-project')).toEqual([])
   })
 
+  it('finds the shell overlay in the profile tree when no application root declares one (#807)', () => {
+    // The layout the reporter measured: the whole runtime packed into one
+    // app.asar, where the root is `@deepseek-ai/dsh-desktop` and the nested
+    // `app.asar/dsh` is `@deepseek-ai/dsh-desktop-runtime` — neither declares
+    // `dsh.bundle.patch` — while the file that actually supplies the shell rows
+    // is `dsh-plugin-desktop`'s own patch, resolved from the profile's module
+    // search. Without it, every user-patch row aimed at a shell row is reported
+    // as an orphan, and deleting those rows drops the window material and the
+    // notification preferences.
+    const resources = join(tmp, 'resources-asar')
+    writeProfile(join(resources, 'app.asar'), { name: '@deepseek-ai/dsh-desktop', version: '0.2.0-rc.2' })
+    writeProfile(join(resources, 'app.asar', 'dsh'), { name: '@deepseek-ai/dsh-desktop-runtime', version: '0.2.0-rc.2' })
+    const host = writePackage(join(resources, 'app.asar', 'dsh'), '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh', version: '0.2.0-rc.2' })
+    Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true })
+
+    // The shell plugin sits in the shared root (<profiles>/node_modules), which
+    // is where the reporter's own file lives.
+    const shellRoot = join(tmp, 'profiles')
+    const shell = writeBundle(shellRoot, 'dsh-plugin-desktop', '2.0.17', [
+      { insert: [{ id: 'desktop-shell', name: 'dsh-plugin-desktop' }] },
+      { insert: [{ id: 'desktop-notifications', name: 'dsh-plugin-desktop/notifications' }] },
+    ])
+    const dir = pdir('profiles/desktop')
+    writeProfile(dir, { name: 'desktop-profile', dsh: { profile: { bundles: [] } } })
+    writeFileSync(join(dir, 'cordis.patch.yml'), dump([
+      { id: 'desktop-shell', config: { mode: 'compatibility' } },
+      { id: 'desktop-notifications', config: { enabled: true } },
+    ]))
+
+    const report = analyzeProfile(dir, { dshInstallDir: host, homeDir: join(tmp, 'empty-home') })
+
+    expect(report.orphans).toEqual([])
+    expect(report.summary.warnings.filter(line => line.includes('patch target not found'))).toEqual([])
+    expect(report.rows.filter(row => row.id.startsWith('desktop-'))).toMatchObject([
+      { id: 'desktop-shell', layer: 'dsh-plugin-desktop' },
+      { id: 'desktop-notifications', layer: 'dsh-plugin-desktop' },
+    ])
+    expect(shell.endsWith(join('dsh-plugin-desktop'))).toBe(true)
+  })
+
+  it('does not accept a package that merely sits at that name (#807)', () => {
+    // The bound is identity, not location — the same discipline the #749 review
+    // settled for the application-root candidates: a directory that happens to
+    // be called `dsh-plugin-desktop` but declares another package is not the
+    // shell, and composing its patch would invent rows.
+    const resources = join(tmp, 'resources-asar-impostor')
+    writeProfile(join(resources, 'app.asar'), { name: '@deepseek-ai/dsh-desktop', version: '0.2.0-rc.2' })
+    const host = writePackage(join(resources, 'app.asar'), '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh', version: '0.2.0-rc.2' })
+    Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true })
+    writeBundle(join(tmp, 'profiles'), 'dsh-plugin-desktop', '9.9.9', [
+      { insert: [{ id: 'desktop-shell', name: 'not-the-shell' }] },
+    ])
+    // Rewrite the manifest so the DIRECTORY name and the package name disagree.
+    writeFileSync(
+      join(tmp, 'profiles', 'node_modules', 'dsh-plugin-desktop', 'package.json'),
+      JSON.stringify({ name: 'not-the-shell', version: '9.9.9', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    )
+    const dir = pdir('profiles/desktop-impostor')
+    writeProfile(dir, { name: 'desktop-profile', dsh: { profile: { bundles: [] } } })
+
+    const report = analyzeProfile(dir, { dshInstallDir: host, homeDir: join(tmp, 'empty-home') })
+
+    expect(report.rows.filter(row => row.id === 'desktop-shell')).toEqual([])
+  })
+
+  it('does not compose that overlay twice when the profile already lists it as a bundle (#807)', () => {
+    // In `dsh.profile.bundles` it is an ordinary bundle layer, which already
+    // contributes its rows; adding the overlay as well would duplicate every
+    // one of them — the failure mode the loader refuses to boot on.
+    const resources = join(tmp, 'resources-asar-twice')
+    writeProfile(join(resources, 'app.asar'), { name: '@deepseek-ai/dsh-desktop', version: '0.2.0-rc.2' })
+    const host = writePackage(join(resources, 'app.asar'), '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh', version: '0.2.0-rc.2' })
+    Object.defineProperty(process, 'resourcesPath', { value: resources, configurable: true })
+    writeBundle(join(tmp, 'profiles'), 'dsh-plugin-desktop', '2.0.17', [
+      { insert: [{ id: 'desktop-shell', name: 'dsh-plugin-desktop' }] },
+    ])
+    const dir = pdir('profiles/desktop-twice')
+    writeProfile(dir, {
+      name: 'desktop-profile',
+      dsh: { profile: { bundles: ['dsh-plugin-desktop'] } },
+      dependencies: { 'dsh-plugin-desktop': '^2.0.17' },
+    })
+
+    const report = analyzeProfile(dir, { dshInstallDir: host, homeDir: join(tmp, 'empty-home') })
+
+    expect(report.duplicates).toEqual([])
+    expect(report.rows.filter(row => row.id === 'desktop-shell')).toHaveLength(1)
+  })
+
   it('composes that layer, so a user patch targeting the shell rows is not an orphan', () => {
     const app = desktop()
     const dir = pdir()
