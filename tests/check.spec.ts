@@ -279,6 +279,55 @@ describe('a host peer is not read from another installation (#726)', () => {
     expect(peer?.satisfied).toBeNull()
   })
 
+  /** Write the host package at `install`, so its shared root holds the version. */
+  const hostAt = (install: string): void => {
+    mkdirSync(install, { recursive: true })
+    writeFileSync(join(install, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.7-rc.2' }, null, 2))
+  }
+  it.each([
+    ['the CLI package directory', (prefix: string) => join(prefix, 'node_modules', '@deepseek-ai', 'dsh')],
+    ['the nested app.asar/dsh package directory (#778)', (prefix: string) => join(prefix, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh')],
+  ])('asks the SHARED root when the located install is %s (#676)', (_shape, installOf) => {
+    // `dshHostInfo()` answers a PACKAGE directory in both of these layouts.
+    // `readNodeModulesVersion` takes a package root and appends `node_modules`
+    // itself, so passing the package directory read `<package>/node_modules/…`
+    // — absent here, which left the located installation silently unasked and
+    // the version unknown even though the caller promised to ask it.
+    const dir = fixture()
+    const prefix = pdir('cli-prefix')
+    const install = installOf(prefix)
+    hostAt(install)
+
+    const report = analyzeProfile(dir, { dshInstallDir: install })
+    const peer = report.peerMismatches.find(mismatch => mismatch.name === '@deepseek-ai/dsh')
+
+    expect(peer?.resolved).toBe('0.1.7-rc.2')
+    expect(peer?.satisfied).toBe(true)
+  })
+
+  it('does not answer from the host package\'s own nested scope (#676)', () => {
+    // Where the host package carries its own `@deepseek-ai` scope (pnpm
+    // isolated trees) the old splice did not answer null — it answered from
+    // that truncated subset, which is the opposite of the "unknown rather than
+    // wrong" the rule promises: here it would report a healthy install as a
+    // peer mismatch against a package that is not the host's.
+    const dir = fixture()
+    const prefix = pdir('cli-prefix-nested')
+    writePackage(prefix, '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh', version: '0.1.7-rc.2' })
+    writePackage(join(prefix, 'node_modules', '@deepseek-ai', 'dsh'), '@deepseek-ai/dsh', {
+      name: '@deepseek-ai/dsh',
+      version: '0.0.1',
+    })
+
+    const report = analyzeProfile(dir, {
+      dshInstallDir: join(prefix, 'node_modules', '@deepseek-ai', 'dsh'),
+    })
+    const peer = report.peerMismatches.find(mismatch => mismatch.name === '@deepseek-ai/dsh')
+
+    expect(peer?.resolved).toBe('0.1.7-rc.2')
+    expect(peer?.satisfied).toBe(true)
+  })
+
   it('still asks the located installation itself, which satisfies the peer', () => {
     const install = pdir('dsh-install')
     writePackage(install, '@deepseek-ai/dsh', { name: '@deepseek-ai/dsh', version: '0.1.7-rc.2' })

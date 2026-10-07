@@ -1360,7 +1360,22 @@ export function analyzeProfile(profileDirectory: string, options: CheckOptions =
         ? readNodeModulesVersion(profileDirectory, name)
         : readProfileVisibleVersion(profileDirectory, name)
       const nested = readNodeModulesVersion(pluginDir, name)
-      const host = dshInstall !== null ? readNodeModulesVersion(dshInstall, name) : null
+      // The located installation is asked as `host` here — and `dshInstall` is
+      // the PACKAGE directory `dshHostInfo()` answers (the CLI layout
+      // `<prefix>/node_modules/@deepseek-ai/dsh`, and the #778 nested form
+      // `<resources>/app.asar/dsh/node_modules/@deepseek-ai/dsh`), or a flat
+      // Desktop deployment root. `readNodeModulesVersion` takes a package root
+      // and appends `node_modules` itself, so passing a package directory read
+      // `<package>/node_modules/<name>`: absent in most layouts, which silently
+      // left the located installation unasked while the comment above promises
+      // it is asked; and where the host package carries its own nested
+      // `@deepseek-ai` scope (pnpm isolated trees) it answered from that
+      // truncated subset instead — the opposite of the "unknown rather than
+      // wrong" this rule promises. `hostNodeModulesRoot()` derives the shared
+      // root from both shapes (#804's fix, same arithmetic).
+      const host = dshInstall !== null
+        ? readNodeModulesVersion(dirname(hostNodeModulesRoot(dshInstall)), name)
+        : null
       // Node resolves a plugin's peer from its OWN node_modules first
       // (nested), then the profile tree (hoisted), then the host install.
       const resolved = nested ?? hoisted ?? host
