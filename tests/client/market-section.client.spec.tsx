@@ -2709,11 +2709,11 @@ describe('long installed names stay readable (#342, #343)', () => {
 })
 
 describe('favorites (#414)', () => {
-  function favoritesStub(initial: string[] = []) {
+  function favoritesStub(initial: string[] = [], installed: Record<string, string> = {}) {
     const state = { favorites: [...initial] }
     stubFetch({
       '/dsh-market/installed': () => ({
-        profile: 'web', installed: {}, live: [], disabled: [], groups: {}, groupOrder: [], favorites: [...state.favorites],
+        profile: 'web', installed, live: Object.keys(installed), disabled: [], groups: {}, groupOrder: [], favorites: [...state.favorites],
       }),
       '/dsh-market/favorite': (body: any) => {
         const url = String(body.url)
@@ -2739,6 +2739,44 @@ describe('favorites (#414)', () => {
       expect(call?.body).toEqual({ url: 'https://github.com/alice/dsh-loop', favorited: true })
     })
     expect(screen.getByRole('button', { name: en.favoriteRemove })).toBeTruthy()
+  })
+
+  it('adds an installed plugin to favorites from its row menu (#785)', async () => {
+    // The complaint: a favorite could only be made from Discover, so the user
+    // had to install a plugin, decide it was worth keeping, and then find it
+    // again in the catalog. The installed row knows which catalog entry it is,
+    // which is the key the Favorites tab resolves by (#414).
+    favoritesStub([], { 'dsh-loop': '^1.0.0' })
+    render(<MarketSection {...props()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Installed/ }))
+    await screen.findByText('dsh-loop')
+
+    await openRowMenu('dsh-loop')
+    fireEvent.click(await screen.findByRole('menuitem', { name: en.favoriteAdd }))
+
+    await waitFor(() => {
+      const call = fetchCalls.find(c => c.path === '/dsh-market/favorite')
+      expect(call?.body).toEqual({ url: 'https://github.com/alice/dsh-loop', favorited: true })
+    })
+    // The row now offers the way back, and the Favorites tab has it.
+    await openRowMenu('dsh-loop')
+    await screen.findByRole('menuitem', { name: en.favoriteRemove })
+  })
+
+  it('offers no favorite action for an installed plugin the catalog does not carry (#785)', async () => {
+    // Favourites are keyed by catalog url; without an entry there is nothing
+    // the Favorites tab could show, so the action would be a dead end.
+    favoritesStub([], { 'dsh-unknown': '^1.0.0' })
+    render(<MarketSection {...props()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Installed/ }))
+    await screen.findByText('dsh-unknown')
+
+    await openRowMenu('dsh-unknown')
+
+    expect(screen.queryByRole('menuitem', { name: en.favoriteAdd })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: en.favoriteRemove })).toBeNull()
+    // The other curation action is still there — this removed one entry, not the menu.
+    expect(screen.getByRole('menuitem', { name: en.blockAdd })).toBeTruthy()
   })
 
   it('lists only favorited plugins on the favorites tab', async () => {

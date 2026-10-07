@@ -293,7 +293,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			capRedCoreDisable: "会禁用 DSH 自带的组件（{0}）",
 			favoriteAdd: "加入收藏",
 			favoriteRemove: "取消收藏",
-			favoritesEmpty: "还没有收藏。在「发现」或「主题」里点书签图标即可收藏。",
+			favoritesEmpty: "还没有收藏。在「发现」或「主题」里点书签图标，或在「已安装」的「···」里加入收藏。",
 			favoritesResultCount: "共 {0} 个收藏",
 			favoritesPluginsSection: "插件（{0}）",
 			favoritesThemesSection: "主题（{0}）",
@@ -987,7 +987,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			capRedCoreDisable: "disables a part of DSH itself ({0})",
 			favoriteAdd: "Add to favorites",
 			favoriteRemove: "Remove from favorites",
-			favoritesEmpty: "No favorites yet. Click the bookmark icon in Discover or Themes to add one.",
+			favoritesEmpty: "No favorites yet. Use the bookmark icon in Discover or Themes, or “Add to favorites” in an installed row’s “···” menu.",
 			favoritesResultCount: "{0} favorites",
 			favoritesPluginsSection: "Plugins ({0})",
 			favoritesThemesSection: "Themes ({0})",
@@ -10726,6 +10726,8 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 				const entry = data === null ? void 0 : catalogEntryForInstalled(data.plugins, name, String(installed[name] ?? ""), repoIdentities[name], repoHints[name]);
 				const aliases = entry === void 0 ? [name] : blockAliases(entry, name);
 				const hidden = aliases.some((alias) => blockedNameSet.has(alias));
+				const favoriteUrl = entry?.url;
+				const favorited = favoriteUrl !== void 0 && favoriteUrlSet.has(favoriteUrl);
 				const removing = removingName === name;
 				const uninstallBusy = removingName !== null || busyUrl !== null || updatingName !== null;
 				const spec = String(installed[name] ?? "");
@@ -10742,6 +10744,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					onSelect: (id) => {
 						setInstalledMenuName(null);
 						if (id === "restore-online" && data !== null && !uninstallBusy) askRestore(name);
+						if (id === "favorite" && favoriteUrl !== void 0) toggleFavorite(favoriteUrl);
 						if (id === "block") toggleBlock(blockToggleName(aliases));
 						if (id === "update-exempt") toggleUpdateExempt(name);
 						if (id === "ignore-boot") ignoreUpdateNotices([name]);
@@ -10762,6 +10765,10 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 							label: t("restoreOnline"),
 							disabled: data === null || uninstallBusy
 						}] : [],
+						...favoriteUrl === void 0 ? [] : [{
+							id: "favorite",
+							label: favorited ? t("favoriteRemove") : t("favoriteAdd")
+						}],
 						{
 							id: "block",
 							label: hidden ? t("blockRemove") : t("blockAdd")
