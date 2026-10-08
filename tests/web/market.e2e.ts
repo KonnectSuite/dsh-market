@@ -49,6 +49,25 @@ describe.skipIf(!HAS_DSH)('web e2e: plugin market', () => {
     await scaffold?.close()
   })
 
+  it('reads host theme variables that the real host page actually defines (#805)', async () => {
+    // `var(--x, fallback)` never fails loudly: an undefined name silently uses
+    // its fallback. 1.66.12 pointed every monospace rule at a name the host
+    // never defined, so the fix did nothing; this asks the running page.
+    const resolved = await page.evaluate(() => {
+      // The test tsconfig has no DOM lib; the page does.
+      const win = globalThis as any
+      // The code font sits on :root, the colour aliases on <body> (and
+      // body[data-ds-dark-theme]) — read each where the theme puts it.
+      return {
+        code: String(win.getComputedStyle(win.document.documentElement).getPropertyValue('--ds-font-family-code')).trim(),
+        border: String(win.getComputedStyle(win.document.body).getPropertyValue('--dsw-alias-border-l2')).trim(),
+      }
+    })
+    if (resolved.code === '' && resolved.border === '') return // a host without the theme tokens: the fallbacks apply
+    expect(resolved.code).toMatch(/Consolas/)
+    expect(resolved.border).not.toBe('')
+  })
+
   it('opens Settings → Plugin Market and renders the catalog paginated', async () => {
     await page.getByRole('button', { name: /^(设置|Settings)$/ }).first().click()
     await page.getByRole('button', { name: /插件市场|Plugin Market/ }).click()
