@@ -355,6 +355,32 @@ describe('surfacing the dsh CLI diagnostics file (#672)', () => {
     }
   })
 
+  it('puts pnpm\'s own error before a diagnostics file that holds only execa\'s summary (#808)', async () => {
+    // The reporter's screen: the file the CLI pointed at (`.plugin-manager/
+    // logs/operation-*/pnpm.log`) now holds one line from execa, because dsh
+    // pipes pnpm's output to the market instead of into the file. Shown
+    // instead of pnpm's error, that line was all the user got, and the real
+    // cause — pnpm's ndjson error record — never appeared.
+    const dir = writeProfile({})
+    const log = join(dir, 'pnpm.log')
+    writeFileSync(log, "Command failed with exit code 1: pnpm add -w --force 'dshmarket@1.66.8' '--reporter=ndjson'\n")
+    const run = (): Promise<InstallResult> => Promise.resolve({
+      ...ok,
+      exitCode: 1,
+      stderr: line(log),
+      pnpmError: 'Something no rule here recognises',
+      pnpmErrorCode: 'ERR_PNPM_BRAND_NEW',
+    })
+    const result = await withHoistRecovery(run, 'web', ['add', 'thing'])
+
+    const cause = result.stderr.indexOf('ERR_PNPM_BRAND_NEW: Something no rule here recognises')
+    const summary = result.stderr.indexOf('Command failed with exit code 1')
+    expect(cause).toBeGreaterThanOrEqual(0)
+    // The path still travels with the report, after the cause.
+    expect(summary).toBeGreaterThan(cause)
+    expect(result.stderr).toContain(log)
+  })
+
   it('says nothing when the CLI named no diagnostics file', async () => {
     writeProfile({})
     const run = (): Promise<InstallResult> => Promise.resolve({ ...ok, exitCode: 1, stderr: 'dsh: pnpm failed in profile directory x\n' })

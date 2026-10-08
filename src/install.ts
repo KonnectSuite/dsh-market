@@ -269,24 +269,33 @@ export async function withHoistRecovery(
         stderr: failure.replaceOutput === true ? failure.message : `${result.stderr}\n\n${failure.message}`,
         ...(failure.replaceOutput === true ? { stdout: '' } : {}),
       }
-    } else if (diagnostics !== null) {
-      // The dsh CLI redirects the whole pnpm run into a file and leaves one
-      // line on stderr: `dsh: pnpm failed; diagnostics: <path>` (its own
-      // literal message). Everything a user or a report needs is in that
-      // file, so show its tail rather than the one line (#672).
-      result = { ...result, stderr: `${result.stderr}\n\n--- dsh diagnostics (${diagnostics.path}) ---\n${diagnostics.text}` }
-    } else if (result.pnpmError !== undefined && result.pnpmError !== '') {
-      // Nothing matched, but pnpm DID say what went wrong — in its ndjson
-      // stream, which never reaches stderr. Without this the user is shown
-      // the tail of dsh's wrapper output ("pnpm failed in profile
-      // directory …"), which is byte-identical for every possible cause and
-      // is why #244, #192 and #138 all read as "the UI shows a stack tail".
+    } else {
+      // Nothing matched. Two things may still say what went wrong, and pnpm's
+      // own words come FIRST (#808).
       //
-      // An unrecognized error is exactly the case where the raw text is
+      // pnpm's structured error arrives in its ndjson stream, which never
+      // reaches stderr. Without it the user sees the tail of dsh's wrapper
+      // output ("pnpm failed in profile directory …"), byte-identical for
+      // every possible cause — why #244, #192 and #138 all read as "the UI
+      // shows a stack tail". An unrecognized error is where the raw text is
       // worth the most: a classified one has a written explanation, this one
-      // has only pnpm's own words, and hiding them leaves nothing at all.
-      const code = result.pnpmErrorCode === undefined ? '' : `${result.pnpmErrorCode}: `
-      result = { ...result, stderr: `${result.stderr}\n\n${code}${result.pnpmError}` }
+      // has only pnpm's own words.
+      //
+      // The CLI's diagnostics file (`dsh: pnpm failed; diagnostics: <path>`,
+      // #672) used to carry the whole pnpm run. It no longer does: dsh now
+      // pipes pnpm's output straight to the market, and the file keeps only
+      // execa's one-line summary ("Command failed with exit code 1: pnpm add
+      // …"). Showing it INSTEAD of pnpm's error — which is what an either/or
+      // here did — put that summary in front of the user and hid the real
+      // cause behind it. Its path is still worth printing for a report, so it
+      // stays, after the error.
+      const blocks: string[] = []
+      if (result.pnpmError !== undefined && result.pnpmError !== '') {
+        const code = result.pnpmErrorCode === undefined ? '' : `${result.pnpmErrorCode}: `
+        blocks.push(`${code}${result.pnpmError}`)
+      }
+      if (diagnostics !== null) blocks.push(`--- dsh diagnostics (${diagnostics.path}) ---\n${diagnostics.text}`)
+      if (blocks.length > 0) result = { ...result, stderr: `${result.stderr}\n\n${blocks.join('\n\n')}` }
     }
   }
   if (!marketFlags && !ok(result) && !result.cancelled
