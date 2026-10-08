@@ -6349,6 +6349,57 @@ describe('generic enable/disable toggle (#60)', () => {
     expect(again.json.unbundled).toEqual([])
   })
 
+  it('puts an unbundled member back when its GROUP is switched on, as the single switch does (#696)', async () => {
+    // @snmtg1008's fourth shape: a plugin that had left dsh.profile.bundles
+    // failed to enable six times in a row ("no loader entry matched"), then
+    // came back on the seventh. The single switch re-adds a package the stack
+    // no longer carries; the group switch called the same per-plugin enable
+    // but skipped everything after it, so from a group it could never return.
+    await installPatchy()
+    bed.loaderEntries.length = 0
+    const manifestPath = join(profileDir('web'), 'package.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.dsh = { ...(manifest.dsh ?? {}), profile: { ...(manifest.dsh?.profile ?? {}), bundles: [] } }
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    await bed.dispatch('POST', '/dsh-market/groups', { action: 'create', name: 'work' })
+    await bed.dispatch('POST', '/dsh-market/groups', { action: 'set-members', name: 'work', members: ['dsh-patchy'] })
+
+    const on = await bed.dispatch('POST', '/dsh-market/groups', { action: 'toggle', name: 'work', enabled: true })
+
+    expect(on.status).toBe(200)
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).dsh.profile.bundles).toContain('dsh-patchy')
+    expect((await bed.dispatch('GET', '/dsh-market/installed')).json.unbundled).toEqual([])
+  })
+
+  it('writes the same two layers from the group switch as from the single one (#696)', async () => {
+    // "Both layers, or neither" is a property of switching a plugin, not of
+    // which control did it. Off from a group must leave the official page's
+    // package switch and the patch rows agreeing, exactly as off from the row.
+    await installPatchy()
+    await bed.dispatch('POST', '/dsh-market/groups', { action: 'create', name: 'work' })
+    await bed.dispatch('POST', '/dsh-market/groups', { action: 'set-members', name: 'work', members: ['dsh-patchy'] })
+    const manifestPath = join(profileDir('web'), 'package.json')
+    const userPatch = join(profileDir('web'), 'cordis.patch.yml')
+
+    await bed.dispatch('POST', '/dsh-market/groups', { action: 'toggle', name: 'work', enabled: false })
+    const groupBundles = JSON.parse(readFileSync(manifestPath, 'utf8')).dsh?.profile?.bundles ?? []
+    const groupPatch = existsSync(userPatch) ? readFileSync(userPatch, 'utf8') : ''
+
+    await bed.dispatch('POST', '/dsh-market/groups', { action: 'toggle', name: 'work', enabled: true })
+    await bed.dispatch('POST', '/dsh-market/toggle', { name: 'dsh-patchy', enabled: false })
+    const singleBundles = JSON.parse(readFileSync(manifestPath, 'utf8')).dsh?.profile?.bundles ?? []
+    const singlePatch = existsSync(userPatch) ? readFileSync(userPatch, 'utf8') : ''
+
+    expect(groupBundles).toEqual(singleBundles)
+    // The same row says the same thing. (Compared as content: the single
+    // switch runs after an off-and-on cycle here, which leaves an emptied-list
+    // comment in the file — the cycle's residue, not the control's.)
+    const disabledRows = (yaml: string): string[] =>
+      [...yaml.matchAll(/- id: ([^\n]+)\n\s+disabled: true/g)].map(match => match[1]!)
+    expect(disabledRows(groupPatch)).toEqual(['dsh-patchy'])
+    expect(disabledRows(groupPatch)).toEqual(disabledRows(singlePatch))
+  })
+
   it('writes the user patch layer on toggle (port of dsh-plugin-hub); activation reads disabled', async () => {
     // A bundle-layer plugin with a real insert row.
     fake.repos['github:o/dsh-patchy'] = {
