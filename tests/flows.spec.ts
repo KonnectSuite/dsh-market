@@ -780,7 +780,7 @@ import { resolveChannel } from '../src/channels.ts'
 import { profileDir } from '../src/profile.ts'
 import { runDshPlugin } from '../src/dsh-cli.ts'
 import { createOfficialDesktopRuntime } from '../src/official-desktop.ts'
-import { setTrustedHostsSource } from '../src/http.ts'
+import { setRequestGateSource, setTrustedHostsSource } from '../src/http.ts'
 import type { AgentsServiceLike } from '../src/agents.ts'
 
 type Handler = (request: unknown, response: unknown) => void | Promise<void>
@@ -6008,6 +6008,51 @@ describe('externally removed hot mounts (#29)', () => {
     const listed = await bed.dispatch('GET', '/dsh-market/installed')
     expect(listed.json.live).toEqual([])
     expect(hot.mounts).toEqual([])
+  })
+})
+
+describe('every market route sits behind the host\'s own login (#603)', () => {
+  // A host gate that admits only requests carrying the session cookie, the
+  // shape BrowserAuth checks. The bed's requests carry none, which is exactly
+  // the client in the report: it can reach the port and holds no session.
+  let restoreGate: (() => void) | null = null
+  const installGate = (): void => {
+    const previous = setRequestGateSource(() => (request: { headers: Record<string, unknown> }) =>
+      typeof request.headers.cookie === 'string' && request.headers.cookie.includes('dsh-session=') ? undefined : 401)
+    restoreGate = () => { setRequestGateSource(previous) }
+  }
+  afterEach(() => { restoreGate?.(); restoreGate = null })
+
+  it('refuses an install from a client with no session, before pnpm is ever run', async () => {
+    installGate()
+    fake.calls = []
+    const r = await bed.dispatch('POST', '/dsh-market/install', { url: 'https://github.com/o/dsh-loop' })
+
+    expect(r.status).toBe(401)
+    expect(fake.calls).toEqual([])
+    expect(installedSpec('dsh-loop')).toBeUndefined()
+  })
+
+  it('refuses the reads too — the report could list the market\'s state with no session', async () => {
+    installGate()
+    expect((await bed.dispatch('GET', '/dsh-market/installed')).status).toBe(401)
+    expect((await bed.dispatch('GET', '/dsh-market/status')).status).toBe(401)
+    expect((await bed.dispatch('GET', '/dsh-market/api/v1/capabilities')).status).toBe(401)
+  })
+
+  it('changes nothing on a host that publishes no gate', async () => {
+    // No installGate(): the 0.1.0-rc.8 shape. The bed's own flows above all run here.
+    expect((await bed.dispatch('GET', '/dsh-market/status')).status).toBe(200)
+  })
+
+  it('is not applied on a Desktop host yet', async () => {
+    // Unmeasured there: the page loads through the app's own protocol handler,
+    // and locking the market's page out of its API would be worse than the
+    // exposure, which is a dsh web one.
+    installGate()
+    bed.dispose()
+    bed = createTestbed({ desktopHost: true, allowRestart: false })
+    expect((await bed.dispatch('GET', '/dsh-market/status')).status).toBe(200)
   })
 })
 

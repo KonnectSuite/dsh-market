@@ -52,7 +52,7 @@ import { acceleratedTarget, resolveHeadCommit } from './accelerate.ts'
 import { updateNotesFor } from './changelog.ts'
 import { checkUpdates, isUpdatablePlugin, compareVersions, fetchNpmLatest, invalidateUpdates, resolveGitRemoteHead, isUpgrade, latestPublishedRecently, setUpdateRegistry, versionOnChannel } from './updates.ts'
 import { createThemeManager, type LoaderEntry } from './themes.ts'
-import { readJsonBody, sameOrigin, sendJson } from './http.ts'
+import { readJsonBody, refuseUnadmitted, sameOrigin, sendJson } from './http.ts'
 import { detectedDebugger, detectedSupervisor, restartAllowed, scheduleRestart, servingPort, trustedRestartRequest, trustedDownloadRequest, type RecoveryHandoffConfig, restartReachableFrom } from './restart.ts'
 import type { RecoveryPlugin } from './recovery.ts'
 import { activationAfterReplace, brokenClientBundles, checkClientBundle, defaultHostRuntimeFacts, hasHostHalf, hostPeerGate, newlyBrokenBundles, peerGateRemedy, verifyActivation } from './verify.ts'
@@ -1893,8 +1893,34 @@ export function mountMarketRoutes(
     return true
   }
 
+  /**
+   * Every market route goes through the host's own request gate first (#603).
+   *
+   * One entry for all of them, so a route added later cannot forget it: the
+   * report's ask was a single place that holds for reads and writes alike. On a
+   * host that publishes no gate this is a pass-through.
+   *
+   * Not on a Desktop host yet. Its page loads from `dsh-app://` through the
+   * app's own protocol handler, and whether those requests carry the session
+   * the host's gate checks has not been measured on a real Desktop; enforcing
+   * it blind could lock the market's own page out of its API. #603's exposure
+   * is `dsh web` reached through a proxy or a tunnel, which this covers.
+   */
+  const enforceHostGate = config.desktopHost !== true
+  const registerRoute = (route: Parameters<WebServerService['register']>[0]): (() => void) => {
+    if (!enforceHostGate) return host.webServer.register(route)
+    const handler = route.handler
+    return host.webServer.register({
+      ...route,
+      handler: (request: IncomingMessage, response: ServerResponse) => {
+        if (refuseUnadmitted(request, response)) return
+        return handler(request, response)
+      },
+    })
+  }
+
   const disposers = [
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/api/v1/capabilities',
       handler: (request, response) => {
@@ -1946,7 +1972,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/api/v1/updates/summary',
       handler: async (request, response) => {
@@ -1988,7 +2014,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/api/v1/updates',
       handler: async (request, response) => {
@@ -2103,7 +2129,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/api/v1/operations',
       handler: (request, response) => {
@@ -2121,7 +2147,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/api/v1/rollback',
       handler: async (request, response) => {
@@ -2156,7 +2182,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/api/v1/restart',
       handler: async (request, response) => {
@@ -2170,7 +2196,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/backup',
       handler: (request, response) => {
@@ -2204,7 +2230,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/restore',
       handler: async (request, response) => {
@@ -2226,7 +2252,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/webdav',
       handler: async (request, response) => {
@@ -2258,7 +2284,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/gist',
       handler: async (request, response) => {
@@ -2310,7 +2336,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/registry',
       handler: async (request, response) => {
@@ -2340,7 +2366,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/discovery-compatibility',
       handler: async (request, response) => {
@@ -2385,7 +2411,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/find-compatible',
       handler: async (request, response) => {
@@ -2446,7 +2472,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/installed',
       handler: async (request, response) => {
@@ -2553,7 +2579,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/check',
       handler: (request, response) => {
@@ -2585,7 +2611,7 @@ export function mountMarketRoutes(
     // fixed; the candidate is trial-validated (dry-run composition replay)
     // before the manifest is written — a broken order is refused and the
     // profile is never touched.
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/bundle-order',
       handler: async (request, response) => {
@@ -2688,7 +2714,7 @@ export function mountMarketRoutes(
     }),
 
     // Issue #98 phase 3: named plugin presets (bundle order + disable list).
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/presets',
       handler: async (request, response) => {
@@ -2756,7 +2782,7 @@ export function mountMarketRoutes(
     }),
 
     // Issue #98 phase 3 (#19): profile snapshots — list, create, restore.
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/snapshots',
       handler: async (request, response) => {
@@ -2785,7 +2811,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/restore-snapshot',
       handler: async (request, response) => {
@@ -2821,7 +2847,7 @@ export function mountMarketRoutes(
 
     // Issue #98 supplement: delete one snapshot (the cap also prunes old ones
     // automatically, but the user may want to drop a specific snapshot).
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/delete-snapshot',
       handler: async (request, response) => {
@@ -2858,7 +2884,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/use-skin',
       handler: async (request, response) => {
@@ -2892,7 +2918,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/toggle',
       handler: async (request, response) => {
@@ -3022,7 +3048,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/note',
       handler: async (request, response) => {
@@ -3060,7 +3086,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/favorite',
       handler: async (request, response) => {
@@ -3113,7 +3139,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/block',
       handler: async (request, response) => {
@@ -3166,7 +3192,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/update-exempt',
       handler: async (request, response) => {
@@ -3217,7 +3243,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/dismiss-broken',
       handler: async (request, response) => {
@@ -3279,7 +3305,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/groups',
       handler: async (request, response) => {
@@ -3378,7 +3404,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/status',
       handler: async (request, response) => {
@@ -3468,7 +3494,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/logs',
       handler: (request, response) => {
@@ -3533,7 +3559,7 @@ export function mountMarketRoutes(
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/updates',
       handler: async (request, response) => {
@@ -3577,7 +3603,7 @@ sendJson(response, 200, { updates })
     // itself does not throw (every failure degrades to `kind: 'none'`), so a
     // dialog that cannot load its data shows a neutral statement rather than
     // an error banner.
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/changelog',
       handler: async (request, response) => {
@@ -3600,7 +3626,7 @@ sendJson(response, 200, { updates })
     }),
 
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/migrate-source',
       handler: async (request, response) => {
@@ -3825,7 +3851,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register(captureLegacy('/dsh-market/update', {
+    registerRoute(captureLegacy('/dsh-market/update', {
       kind: 'exact',
       path: '/dsh-market/update',
       handler: async (request, response) => {
@@ -4870,7 +4896,7 @@ sendJson(response, 200, { updates })
       },
     })),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/setup-pnpm',
       handler: async (request, response) => {
@@ -4912,7 +4938,7 @@ sendJson(response, 200, { updates })
      * a browser that is not on loopback never gets one, and the choice would
      * be unreachable there. Same-origin POST, like every other mutation.
      */
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/channel',
       handler: async (request, response) => {
@@ -4957,7 +4983,7 @@ sendJson(response, 200, { updates })
      * state.json cannot also be owned by the settings schema without the two
      * writing over each other.
      */
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/region',
       handler: async (request, response) => {
@@ -5003,7 +5029,7 @@ sendJson(response, 200, { updates })
      * unavailable. It is one escape hatch, not three service-level knobs;
      * the service ordering itself remains maintained by the routing table.
      */
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/github-proxy',
       handler: async (request, response) => {
@@ -5043,7 +5069,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/build-env',
       handler: async (request, response) => {
@@ -5091,7 +5117,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/self-uninstall',
       handler: async (request, response) => {
@@ -5202,7 +5228,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register(captureLegacy('/dsh-market/restart', {
+    registerRoute(captureLegacy('/dsh-market/restart', {
       kind: 'exact',
       path: '/dsh-market/restart',
       handler: (request, response) => {
@@ -5260,7 +5286,7 @@ sendJson(response, 200, { updates })
       },
     })),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/approve-builds',
       handler: async (request, response) => {
@@ -5419,7 +5445,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/cancel',
       handler: async (request, response) => {
@@ -5442,7 +5468,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/uninstall',
       handler: async (request, response) => {
@@ -5652,7 +5678,7 @@ sendJson(response, 200, { updates })
       },
     }),
 
-    host.webServer.register(captureLegacy('/dsh-market/rollback', {
+    registerRoute(captureLegacy('/dsh-market/rollback', {
       kind: 'exact',
       path: '/dsh-market/rollback',
       handler: async (request, response) => {
@@ -5731,7 +5757,7 @@ sendJson(response, 200, { updates })
       },
     })),
 
-    host.webServer.register({
+    registerRoute({
       kind: 'exact',
       path: '/dsh-market/install',
       handler: async (request, response) => {

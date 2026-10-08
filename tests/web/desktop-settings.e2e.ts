@@ -35,7 +35,7 @@ describe.skipIf(!dshAvailable())('host dispatches the market settings card (#516
     // the page is gone, not that a card appears on a page that does not
     // exist; asserting either shape unconditionally would demand something a
     // host cannot do, or prove nothing on the host that cannot do it.
-    const status = await (await fetch(`${scaffold.baseUrl}/dsh-market/status`)).json() as {
+    const status = await (await scaffold.api(`/dsh-market/status`)).json() as {
       settingsNamespace?: string
     }
     expect(status.settingsNamespace, 'the market has booted and must have an answer').not.toBe('pending')
@@ -107,9 +107,9 @@ export function apply(ctx) {
     ]))
     writeFileSync(join(scaffold.home, 'settings.yaml'), 'dsh-market:\n  allowRestart: true\n')
     await scaffold.restart()
-    const status = await (await fetch(`${scaffold.baseUrl}/dsh-market/status`)).json() as { restart: boolean }
+    const status = await (await scaffold.api(`/dsh-market/status`)).json() as { restart: boolean }
     expect(status.restart).toBe(false)
-    const capabilities = await (await fetch(`${scaffold.baseUrl}/dsh-market/api/v1/capabilities`)).json()
+    const capabilities = await (await scaffold.api(`/dsh-market/api/v1/capabilities`)).json()
     expect(capabilities).toMatchObject({
       profile: 'desktop-test', runtime: 'desktop',
       restart: { supported: false, managedBy: 'desktop-host' },

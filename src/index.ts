@@ -8,7 +8,7 @@ import { dirname, isAbsolute } from 'node:path'
 import { createDesktopPluginRuntime, setHostPackageManager, type DesktopPnpmLike, type HostPackageManager } from './dsh-cli.ts'
 import { createOfficialDesktopRuntime, type OfficialPluginManagerLike } from './official-desktop.ts'
 import { isDshProfileName } from './profile.ts'
-import { setTrustedHostsSource } from './http.ts'
+import { setRequestGateSource, setTrustedHostsSource } from './http.ts'
 import { mountMarketRoutes, type HostPluginActivation, type MarketConfig, type MarketHost } from './routes.ts'
 import { installDesktopMarketSettings, installMarketSettings } from './settings.ts'
 import type { AgentsServiceLike } from './agents.ts'
@@ -187,9 +187,22 @@ export function useTrustedHosts(ctx: Context): () => void {
       ? connection.trustedHosts.filter((entry): entry is string => typeof entry === 'string')
       : []
   })
+  // The same service carries the host's request gate (#603): its fence plus
+  // its browser login, the check its own API runs. Read per request for the
+  // same reason as the authorities above.
+  const previousGate = setRequestGateSource(() => {
+    const connection = ctx.get('connection') as { requestRejection?: unknown } | undefined
+    const gate = connection?.requestRejection
+    return typeof gate === 'function'
+      ? (request => (gate as (request: unknown) => number | undefined).call(connection, request))
+      : undefined
+  })
   // The setter returns the PREVIOUS source, not a restore closure — the same
   // contract as setBuildEnvSource in dsh-cli.ts.
-  return () => { setTrustedHostsSource(previous) }
+  return () => {
+    setTrustedHostsSource(previous)
+    setRequestGateSource(previousGate)
+  }
 }
 
 export function apply(ctx: Context, config?: Config): void {

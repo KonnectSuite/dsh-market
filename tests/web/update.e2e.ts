@@ -43,13 +43,13 @@ describe.skipIf(!HAS_DSH).sequential('web e2e: the real update chain', () => {
   afterAll(async () => { await scaffold?.close() })
 
   const post = async (path: string, body: unknown): Promise<Response> =>
-    fetch(`${base}${path}`, {
+    scaffold.api(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify(body),
     })
 
-  const get = async (path: string): Promise<any> => (await fetch(`${base}${path}`)).json()
+  const get = async (path: string): Promise<any> => (await scaffold.api(path)).json()
 
   /** The version the RUNNING process is serving, or null when not live. */
   const liveVersion = (): string | null => {

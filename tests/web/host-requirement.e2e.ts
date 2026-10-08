@@ -42,7 +42,7 @@ describe.skipIf(!HAS_DSH).sequential('web e2e: the host-version pre-check (#404)
   afterAll(async () => { await scaffold?.close() })
 
   const post = async (path: string, body: unknown): Promise<Response> =>
-    fetch(`${base}${path}`, {
+    scaffold.api(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify(body),
@@ -113,7 +113,7 @@ describe.skipIf(!HAS_DSH).sequential('web e2e: the fresh-install host-version pr
   afterAll(async () => { await scaffold?.close() })
 
   const post = async (path: string, body: unknown): Promise<Response> =>
-    fetch(`${base}${path}`, {
+    scaffold.api(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify(body),

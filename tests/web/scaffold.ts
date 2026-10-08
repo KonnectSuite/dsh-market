@@ -66,6 +66,14 @@ export interface WebScaffold {
    * URL directly: `openMarketPage` exchanges it outside browser navigation. */
   readonly processLaunchUrl: string
   home: string
+  /**
+   * `fetch` against this host as a logged-in browser would: the session
+   * cookie from the process launch token rides along. Market routes sit
+   * behind the host's own login since #603, so a bare Node `fetch` is the
+   * anonymous client that fix exists to refuse — use this for every
+   * Node-side call, and bare `fetch` only to assert that refusal.
+   */
+  api(path: string, init?: RequestInit): Promise<Response>
   /** Stop dsh and boot it again on the same DSH_HOME, same port. */
   restart(): Promise<void>
   /**
@@ -490,7 +498,10 @@ export async function launchMarketScaffold(options: ScaffoldOptions = {}): Promi
         if (!statusReady) {
           try {
             const res = await fetch(`${baseUrl}/dsh-market/status`, { signal: AbortSignal.timeout(2000) })
-            statusReady = res.ok
+            // 401 is the market answering behind the host's login (#603):
+            // mounted, and refusing a client with no session — which this
+            // readiness probe is. A host without the login answers 200.
+            statusReady = res.ok || res.status === 401
           } catch { /* not up yet */ }
         }
         const processLaunchUrl = output.processLaunchUrl
@@ -536,11 +547,23 @@ export async function launchMarketScaffold(options: ScaffoldOptions = {}): Promi
   )
   let child = launched.child
   let processLaunchUrl = launched.processLaunchUrl
+  /** `name=value` of this boot's session cookie; null on a host without the login. */
+  let sessionCookie: string | null = null
+  const authenticate = async (): Promise<void> => {
+    const exchange = await exchangeProcessLaunchToken(baseUrl, processLaunchUrl)
+    sessionCookie = exchange === null ? null : `${exchange.cookie.name}=${exchange.cookie.value}`
+  }
+  await authenticate()
 
   return {
     baseUrl,
     get processLaunchUrl() { return processLaunchUrl },
     home,
+    api: (path: string, init: RequestInit = {}): Promise<Response> => {
+      const headers = new Headers(init.headers)
+      if (sessionCookie !== null) headers.set('cookie', sessionCookie)
+      return fetch(`${baseUrl}${path}`, { ...init, headers })
+    },
     /**
      * Stop dsh and start it again on the same DSH_HOME. This is the only way
      * to observe what the market's file-level work actually did: the profile
@@ -553,6 +576,7 @@ export async function launchMarketScaffold(options: ScaffoldOptions = {}): Promi
       launched = await boot()
       child = launched.child
       processLaunchUrl = launched.processLaunchUrl
+      await authenticate()
     },
     publish: (name: string, version: string): void => {
       if (registry === null) throw new Error('no fixture registry — pass `fixtures` to launchMarketScaffold')
