@@ -713,6 +713,51 @@ describe('withHoistRecovery', () => {
     expect(readFileSync(workspace, 'utf8')).toBe('minimumReleaseAgeExclude:\n  - dshmarket@1.38.1 || 1.65.1 || 1.65.4\n')
   })
 
+  it('repairs a rule appended during the run even when the host\'s error hides pnpm\'s text (#732)', async () => {
+    // The official desktop host runs pnpm itself and hands back its own
+    // message, not pnpm's. In the report it appended `dsh-cost-meter@1.8.5` as
+    // a second rule behind the existing union — dead, because pnpm reads only
+    // the first per name — and the market's repair never fired, since it
+    // waited for `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` to arrive.
+    const dir = writeProfile({})
+    const workspace = join(dir, 'pnpm-workspace.yaml')
+    writeFileSync(workspace, 'minimumReleaseAgeExclude:\n  - dsh-cost-meter@1.7.40 || 1.7.47 || 1.8.2 || 1.8.3 || 1.8.4\n')
+    const calls: string[][] = []
+    let failFirst = true
+    const run = async (_profile: string, args: string[]): Promise<InstallResult> => {
+      calls.push(args)
+      if (failFirst) {
+        failFirst = false
+        writeFileSync(workspace, 'minimumReleaseAgeExclude:\n  - dsh-cost-meter@1.7.40 || 1.7.47 || 1.8.2 || 1.8.3 || 1.8.4\n  - dsh-cost-meter@1.8.5\n')
+        // What the bridge actually returns: the manager's own message.
+        return { exitCode: 1, timedOut: false, stdout: '', stderr: '{"code":"install-failed"}', cancelled: false }
+      }
+      return ok
+    }
+
+    const result = await withHoistRecovery(run, 'desktop', ['add', 'dsh-cost-meter@1.8.5'], dir, { marketFlags: false })
+
+    expect(result.exitCode).toBe(0)
+    expect(calls).toEqual([['add', 'dsh-cost-meter@1.8.5'], ['add', 'dsh-cost-meter@1.8.5']])
+    expect(readFileSync(workspace, 'utf8')).toBe('minimumReleaseAgeExclude:\n  - dsh-cost-meter@1.7.40 || 1.7.47 || 1.8.2 || 1.8.3 || 1.8.4 || 1.8.5\n')
+  })
+
+  it('does not retry an unrelated failure that wrote no duplicate rule (#732)', async () => {
+    // The repair is keyed on evidence in the file, not on "something failed":
+    // without a shadowed rule there is nothing a retry could change.
+    const dir = writeProfile({})
+    writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'minimumReleaseAgeExclude:\n  - keep@1.0.0\n')
+    const calls: string[][] = []
+    const run = async (_profile: string, args: string[]): Promise<InstallResult> => {
+      calls.push(args)
+      return { exitCode: 1, timedOut: false, stdout: '', stderr: '{"code":"install-failed"}', cancelled: false }
+    }
+
+    await withHoistRecovery(run, 'desktop', ['add', 'thing'], dir, { marketFlags: false })
+
+    expect(calls.filter(call => call[0] === 'add')).toEqual([['add', 'thing']])
+  })
+
   it('merges before an `install` too, which reads the same key (#732)', async () => {
     const dir = writeProfile({})
     const workspace = join(dir, 'pnpm-workspace.yaml')

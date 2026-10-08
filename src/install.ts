@@ -149,7 +149,25 @@ export async function withHoistRecovery(
   }
   let result = await run(profile, pluginArgs)
   const ok = (r: InstallResult): boolean => r.exitCode === 0 && !r.timedOut && !r.cancelled
-  if (!ok(result) && !result.cancelled) {
+  // A shadowed rule written DURING the run is its own evidence (#732). The
+  // file was merged just before the run, so a duplicate now means pnpm — or
+  // the host driving it — appended one while this command ran, and every
+  // retry would trip on it. The repair below in the release-age branch only
+  // fired when pnpm's error text reached us; the official desktop host hands
+  // back its own message and `packageResult.output`, which need not carry
+  // `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`, so the line the host had just
+  // appended stayed dead (@Mlte0907, 1.66.7). The merge is a no-op when
+  // nothing is duplicated, so asking it costs one file read.
+  let repairedDuringRun = false
+  if (!ok(result) && !result.cancelled && (pluginArgs[0] === 'add' || pluginArgs[0] === 'remove')) {
+    const mergedNow = mergeDuplicateReleaseAgeExcludes(profile, profileDirectory)
+    if (mergedNow.length > 0) {
+      repairedDuringRun = true
+      logEvent('warn', 'install', `a second minimumReleaseAgeExclude rule for ${mergedNow.join(', ')} was appended during the run, and pnpm honours only the first, shadowing it (#732) — merged them into one and retrying once`)
+      result = await run(profile, pluginArgs)
+    }
+  }
+  if (!ok(result) && !result.cancelled && !repairedDuringRun) {
     const failure = classifyPnpmFailure(`${result.stderr}\n${result.stdout}`, result.exitCode)
     if (failure?.code === 'unparseable-build-key') {
       // The profile's own allowBuilds block is what fails, so no retry of the
