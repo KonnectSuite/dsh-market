@@ -118,27 +118,36 @@ jobs:
         # registers into `plugins.bundle.config` and the spec asserts it at
         # that seat — which is exactly the kind of change nothing in CI could
         # see back when the alpha broke the host's boot.
-        # The 0.1.7 line is tracked at its published `latest` (rc.2), and 0.2
-        # is the new `next`: it is where this plugin broke first, and it broke
-        # SILENTLY (#756) — the host's own compatibility gate refused the peer
-        # range and skipped the bundle, so the market vanished from the UI with
-        # one stderr line. A caret over a prerelease ends at `<0.2.0-0`, so no
-        # amount of OR-ing earlier lines admits a 0.2 prerelease; the range has
-        # to name the new line. Running it here is what keeps that from
-        # shipping again on the line after this one.
-        dsh: ['0.1.0-rc.8', '0.1.2-alpha.2', '0.1.7-rc.2', '0.2.0-rc.1']
+        # Each line is tracked at its published head: 0.1.7 at rc.2, and 0.2 at
+        # rc.2, which is npm's `latest` since 2026-09-29. 0.2 is where this
+        # plugin broke first, and it broke SILENTLY (#756) — the host's own
+        # compatibility gate refused the peer range and skipped the bundle, so
+        # the market vanished from the UI with one stderr line. A caret over a
+        # prerelease ends at `<0.2.0-0`, so no amount of OR-ing earlier lines
+        # admits a 0.2 prerelease; the range has to name the new line. Running
+        # it here is what keeps that from shipping again on the line after this
+        # one.
+        #
+        # rc.1 → rc.2 changed one thing this plugin touches: `dsh plugin
+        # --profile desktop` is no longer refused outright — Desktop's own
+        # carrier may run it, with Desktop fully quit (it takes a 120 s lock on
+        # the profile's package.json). The market never runs it from inside a
+        # running Desktop, so nothing here depends on the difference; the CLI
+        # path this lane drives is the web profile's, unchanged.
+        dsh: ['0.1.0-rc.8', '0.1.2-alpha.2', '0.1.7-rc.2', '0.2.0-rc.2']
         exclude:
           # Host-API breakage is platform-independent, and Windows web-e2e is
-          # the slowest job in the matrix (~8 min). Running the newer lines on
-          # Linux alone catches the class without doubling the critical path;
-          # the released line still runs on both, because the install chain
-          # itself is where Windows differs.
+          # the slowest job in the matrix (~8 min). Running the older and the
+          # prerelease lines on Linux alone catches that class without doubling
+          # the critical path. The line users actually get — npm's `latest`,
+          # now 0.2.0-rc.2, and the one nearly every Desktop report comes from —
+          # runs on both, because the install chain itself is where Windows
+          # differs. 0.1.0-rc.8 keeps its Windows job as the oldest supported
+          # floor.
           - os: windows-latest
             dsh: '0.1.2-alpha.2'
           - os: windows-latest
             dsh: '0.1.7-rc.2'
-          - os: windows-latest
-            dsh: '0.2.0-rc.1'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

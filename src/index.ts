@@ -203,14 +203,18 @@ export function apply(ctx: Context, config?: Config): void {
       // its name, and never with somebody else's.
       const profileContext = ctx.get('profileContext') as ProfileContextLike | undefined
       const launched = launchedProfile(profileContext)
-      // The official Electron app owns this profile. Its CLI explicitly
-      // refuses `--profile desktop`; use the app's pluginManager service.
+      // The official Electron app owns this profile. Its CLI refuses
+      // `--profile desktop` (outright up to dsh 0.2.0-rc.1; from rc.2 it
+      // admits only Desktop's own carrier, and only with Desktop fully quit —
+      // never from inside the running app this market lives in), so use the
+      // app's pluginManager service.
       // Looking it up at request time lets the market mount before the
       // service while still failing closed if it never becomes available.
       // The dsh CLI refuses a profile by NAME — `profile.toLowerCase() ===
-      // "desktop"` (@deepseek-ai/dsh 0.1.7-alpha.2) — so a launched profile
-      // with that name can never be changed through `dsh plugin`, whatever
-      // the install layout. Detection follows the same rule rather than the
+      // "desktop"` (@deepseek-ai/dsh 0.1.7-alpha.2; from 0.2.0-rc.2 it lets
+      // only Desktop's own carrier through, with the app quit) — so from
+      // inside a running Desktop a launched profile with that name can never
+      // be changed through `dsh plugin`, whatever the install layout. Detection follows the same rule rather than the
       // app.asar anchor shape an earlier draft keyed on: the official desktop
       // host is not published, its layout could not be checked, and a host
       // that missed the anchor test fell straight back to the CLI and failed
@@ -221,7 +225,8 @@ export function apply(ctx: Context, config?: Config): void {
       const configuredDesktop = configured !== undefined && configured.toLowerCase() === 'desktop'
       const officialElectron = launched !== undefined && launched.name.toLowerCase() === 'desktop'
       // An explicitly configured `profile: desktop` takes this branch too. The
-      // CLI refuses that profile by NAME, so routing it there — which is what
+      // CLI refuses that profile by NAME (see above — from inside the running
+      // app on every version), so routing it there — which is what
       // an operator's own workaround for a host that hides `profileContext`
       // does (#744) — makes every install fail for certain. The configuration
       // still wins over the launcher for the name; it just cannot win a branch
