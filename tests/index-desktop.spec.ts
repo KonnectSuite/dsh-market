@@ -78,6 +78,55 @@ beforeEach(() => {
   state.packageManagers = []
 })
 
+describe('the exported log says where the profile came from (#744)', () => {
+  // The investigation in #744 stalled on one missing fact: did the market not
+  // SEE the launcher's profileContext (scope), see it too late (timing), or see
+  // a shape it refused? Each needs a different fix. The export now says which.
+  type Origin = { profileSource: string; launcherAtStart: string; launcherNow: () => string }
+  const origin = (): Origin => state.mounts[0].config.origin as Origin
+
+  it('tells a late service (timing) apart from one never seen (scope)', () => {
+    const services: Record<string, unknown> = { webServer: {}, loader: {} }
+    const ctx = new FakeContext(services)
+
+    apply(ctx as never)
+
+    expect(state.mounts[0].config.profile).toBe('web')
+    expect(origin().profileSource).toMatch(/^default/)
+    expect(origin().launcherAtStart).toBe('absent')
+    expect(origin().launcherNow()).toBe('absent')
+    // The service arrives after the market mounted: the live read sees it.
+    services.profileContext = { name: 'desktop', dir: '/home/u/.dsh/profiles/desktop' }
+    expect(origin().launcherAtStart).toBe('absent')
+    expect(origin().launcherNow()).toBe('present (name desktop)')
+  })
+
+  it('names a shape the market refused, without printing the value', () => {
+    const ctx = new FakeContext({ webServer: {}, loader: {}, profileContext: { name: 'desktop', dir: new URL('file:///home/u/.dsh/profiles/desktop') } })
+
+    apply(ctx as never)
+
+    expect(origin().launcherAtStart).toBe('present but unusable (name: string, dir: object)')
+  })
+
+  it('says which source picked the profile on the official desktop branch', () => {
+    const ctx = new FakeContext({ webServer: {}, loader: {}, profileContext: { name: 'desktop', dir: '/home/u/.dsh/profiles/desktop' } })
+
+    apply(ctx as never)
+
+    expect(origin().profileSource).toBe('launcher profileContext, official desktop branch')
+    expect(origin().launcherAtStart).toBe('present (name desktop)')
+  })
+
+  it('says when the operator\'s configuration picked it instead', () => {
+    const ctx = new FakeContext({ webServer: {}, loader: {}, profileContext: { name: 'work', dir: '/home/u/.dsh/profiles/work' } })
+
+    apply(ctx as never, { profile: 'other' } as never)
+
+    expect(origin().profileSource).toBe('configured (cordis.yml)')
+  })
+})
+
 describe('profile the launcher booted (#639)', () => {
   const launcher = { name: 'desktop', dir: '/home/u/.dsh/profiles/desktop' }
   // A profile the dsh CLI can launch. It cannot be named `desktop`: the CLI

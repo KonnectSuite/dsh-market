@@ -161,6 +161,24 @@ export interface MarketConfig {
    * the market computes for its children.
    */
   buildEnv?: Record<string, string>
+  /**
+   * Where `profile` came from, for the exported log (#744). Not used for any
+   * decision: it exists because "why did the market think this was the web
+   * profile" stalled an investigation for want of exactly this line.
+   */
+  origin?: {
+    /** Which source named the profile. */
+    profileSource: string
+    /** The launcher's `profileContext` as the market saw it at start. */
+    launcherAtStart: string
+    /**
+     * The same, read again now. Absent at start but present later means the
+     * service arrived after the market mounted (timing); absent both times
+     * means the market cannot see it at all (scope) — the two causes need
+     * different fixes, and only a live read tells them apart.
+     */
+    launcherNow: () => string
+  }
 }
 
 /**
@@ -3507,6 +3525,10 @@ export function mountMarketRoutes(
           platform: `${process.platform} ${process.arch}`,
           node: process.version,
           profile: config.profile,
+          ...(config.origin === undefined ? {} : {
+            'profile source': config.origin.profileSource,
+            'launcher profileContext': `at start: ${config.origin.launcherAtStart}; now: ${config.origin.launcherNow()}`,
+          }),
         }, snapshot, readPersistentLog(persistentLogFile)))
       },
     }),

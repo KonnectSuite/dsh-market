@@ -98,6 +98,21 @@ function launchedProfile(context: ProfileContextLike | undefined): { name: strin
 }
 
 /**
+ * The launcher's `profileContext` in one line, for the exported log (#744).
+ *
+ * Only the facts that decide the branch: whether the service is there, and
+ * whether its shape is one `launchedProfile` accepts. Never the directory
+ * itself — the log already carries the profile path where it is needed.
+ */
+export function describeProfileContext(value: unknown): string {
+  if (value === undefined || value === null) return 'absent'
+  const launched = launchedProfile(value as ProfileContextLike)
+  if (launched !== undefined) return `present (name ${launched.name})`
+  const shape = value as { name?: unknown; dir?: unknown }
+  return `present but unusable (name: ${typeof shape.name}, dir: ${typeof shape.dir})`
+}
+
+/**
  * The package manager the launcher published for this profile, if any.
  *
  * Every field is checked before use, and one bad field discards the whole
@@ -226,6 +241,11 @@ export function apply(ctx: Context, config?: Config): void {
         const resolved: MarketConfig = {
           profile: profileName,
           ...(profileDirectory === undefined ? {} : { profileDirectory }),
+          origin: {
+            profileSource: configured !== undefined ? 'configured (cordis.yml), official desktop branch' : 'launcher profileContext, official desktop branch',
+            launcherAtStart: describeProfileContext(profileContext),
+            launcherNow: () => describeProfileContext(ctx.get('profileContext')),
+          },
           desktopHost: true,
           allowRestart: false,
           maxSnapshots: config?.maxSnapshots,
@@ -257,6 +277,14 @@ export function apply(ctx: Context, config?: Config): void {
       const resolved: MarketConfig = {
         profile: config?.profile ?? launched?.name ?? argvProfile() ?? 'web',
         ...(useLaunchedDir ? { profileDirectory: launched.dir } : {}),
+        origin: {
+          profileSource: config?.profile !== undefined ? 'configured (cordis.yml)'
+            : launched !== undefined ? 'launcher profileContext'
+            : argvProfile() !== undefined ? '--profile flag'
+            : 'default (no configured profile, no launcher profileContext, no --profile flag)',
+          launcherAtStart: describeProfileContext(profileContext),
+          launcherNow: () => describeProfileContext(ctx.get('profileContext')),
+        },
         // Left UNDEFINED when unconfigured, deliberately: `?? true` here
         // would turn "the operator said nothing" into "the operator said
         // yes", and restartAllowed() could no longer tell them apart — which
@@ -293,6 +321,11 @@ export function apply(ctx: Context, config?: Config): void {
       const resolved: MarketConfig = {
         profile: current.name,
         profileDirectory: current.dir,
+        origin: {
+          profileSource: 'desktop shell (desktopProfiles)',
+          launcherAtStart: describeProfileContext(ctx.get('profileContext')),
+          launcherNow: () => describeProfileContext(ctx.get('profileContext')),
+        },
         // The shell owns the window and the process lifecycle here; the
         // capability bits report that, and an explicit profile directory no
         // longer implies it (#639).

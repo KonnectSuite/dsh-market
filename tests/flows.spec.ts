@@ -6011,6 +6011,24 @@ describe('externally removed hot mounts (#29)', () => {
   })
 })
 
+describe('the exported log carries the profile origin (#744)', () => {
+  it('prints the source and both reads of the launcher context', async () => {
+    let now = 'absent'
+    bed.dispose()
+    bed = createTestbed({
+      origin: { profileSource: 'default (no configured profile, no launcher profileContext, no --profile flag)', launcherAtStart: 'absent', launcherNow: () => now },
+    } as never)
+    now = 'present (name desktop)'
+
+    const exported = await bed.dispatch('GET', '/dsh-market/logs')
+    const text = exported.text
+
+    expect(text).toContain('profile source: default (no configured profile, no launcher profileContext, no --profile flag)')
+    // Read at export time, not at mount: this line is what distinguishes timing from scope.
+    expect(text).toContain('launcher profileContext: at start: absent; now: present (name desktop)')
+  })
+})
+
 describe('one-click restart guards (#14)', () => {
   it('delegates the public v1 restart route to the guarded restart executor', async () => {
     const result = await bed.dispatch('POST', '/dsh-market/api/v1/restart', {})
