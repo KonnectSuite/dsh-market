@@ -542,6 +542,21 @@ describe('POST /dsh-market/dismiss-broken (#763)', () => {
     jsonBody(await hit(routes, '/dsh-market/installed', { method: 'GET', url: '/dsh-market/installed' }))
       .brokenPlugins as Record<string, unknown>
 
+  it('keeps a cancel-caused removal across a restart, and keeps its reason (#663)', async () => {
+    // The notice is what explains the plugin's absence after the next start,
+    // and the next start is exactly when state.json is read back from disk. A
+    // reason the reader does not know is dropped there, which would make the
+    // cancel case vanish on restart — the one moment it was written for.
+    writeStandardProfile()
+    writeMarketState(dir, {
+      disabled: new Set(), groups: {}, groupOrder: [],
+      brokenPlugins: { 'dsh-pet': { spec: '^0.3.5', reason: 'incomplete-build-cancelled', at: '2026-10-08T00:27:20.000Z' } },
+    })
+    routes = mount().routes
+
+    expect(await listed()).toMatchObject({ 'dsh-pet': { spec: '^0.3.5', reason: 'incomplete-build-cancelled' } })
+  })
+
   it('removes only the named notice and leaves the others standing', async () => {
     seedBroken('dsh-alpha', 'dsh-beta')
     expect(Object.keys(await listed()).sort()).toEqual(['dsh-alpha', 'dsh-beta'])

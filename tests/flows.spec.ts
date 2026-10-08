@@ -82,6 +82,12 @@ const fake = vi.hoisted(() => ({
   /** Set by the mocked cancelActive: the in-flight command resolves cancelled. */
   cancelNext: false,
   /**
+   * With cancelNext: the cancel lands while pnpm is swapping this package's
+   * directory (#663). pnpm empties the target before retrying the rename, so
+   * the listed files of the old build are already gone when it stops.
+   */
+  cancelClears: null as { name: string; cleared: string[] } | null,
+  /**
    * Fail the next remove AFTER deleting node_modules but WITHOUT saving
    * package.json — pnpm's real half-uninstall shape (#65's mirror image:
    * files are gone, the manifest entry survives, the next boot's loader
@@ -270,6 +276,10 @@ vi.mock('../src/dsh-cli.ts', () => {
     if (fake.gate !== null) await fake.gate
     if (fake.cancelNext) {
       fake.cancelNext = false
+      if (fake.cancelClears !== null) {
+        for (const rel of fake.cancelClears.cleared) rmSync(join(fake.profileDir, 'node_modules', fake.cancelClears.name, rel), { force: true })
+        fake.cancelClears = null
+      }
       return { exitCode: null, timedOut: false, stdout: '', stderr: '', cancelled: true }
     }
     const positional = args.filter(a => !a.startsWith('-'))
@@ -882,6 +892,7 @@ beforeEach(() => {
   fake.wreckLockOnLockedFailure = false
   fake.gate = null
   fake.cancelNext = false
+  fake.cancelClears = null
   fake.buildScriptOutputOnce = ''
   fake.failNextAddStderrOnce = ''
   fake.failAfterWriteStderrOnce = ''
@@ -2223,6 +2234,43 @@ describe('update flow — no npm publishing required', () => {
     expect(Object.keys(listed.json.installed)).not.toContain('dsh-loop')
     const logs = await bed.dispatch('GET', '/dsh-market/logs')
     expect(logs.text).toContain('update-removed-declaration')
+  })
+
+  it('drops the declaration when a cancel lands mid-swap and leaves the directory empty (#663)', async () => {
+    // The reporter's run: pnpm stalled at the swap (~1 min at "96%"), the user
+    // cancelled, and the result was the same empty shell the open-file refusal
+    // leaves. The drop above keys on pnpm's error text, which a cancelled run
+    // never produces — so the profile kept declaring an empty directory and
+    // Desktop crashed twice on the next start.
+    advanceNpmLatest('1.2.0')
+    const specBefore = installedSpec('dsh-loop')
+    fake.cancelNext = true
+    fake.cancelClears = { name: 'dsh-loop', cleared: ['package.json', 'lib/index.js'] }
+
+    const r = await bed.dispatch('POST', '/dsh-market/update', { name: 'dsh-loop' })
+
+    expect(r.json).toMatchObject({ ok: false, cancelled: true })
+    expect(r.json.removedDeclaration).toMatchObject({ name: 'dsh-loop', spec: specBefore, reason: 'incomplete-build-cancelled' })
+    expect(readManifestAt(fake.profileDir).dependencies?.['dsh-loop']).toBeUndefined()
+    // The record says it was a cancel: no cause was observed, so the notice
+    // must not claim one.
+    const listed = await bed.dispatch('GET', '/dsh-market/installed')
+    expect(listed.json.brokenPlugins['dsh-loop']).toMatchObject({ spec: specBefore, reason: 'incomplete-build-cancelled' })
+  })
+
+  it('leaves an ordinary cancel alone when the previous build can still load (#663)', async () => {
+    // The common cancel: stopped before the swap. Nothing is dropped, nothing
+    // is restored — the user's choice stands exactly as before.
+    advanceNpmLatest('1.2.0')
+    const specBefore = installedSpec('dsh-loop')
+    fake.cancelNext = true
+
+    const r = await bed.dispatch('POST', '/dsh-market/update', { name: 'dsh-loop' })
+
+    expect(r.json).toMatchObject({ ok: false, cancelled: true })
+    expect(r.json.removedDeclaration).toBeUndefined()
+    expect(installedSpec('dsh-loop')).toBe(specBefore)
+    expect((await bed.dispatch('GET', '/dsh-market/installed')).json.brokenPlugins?.['dsh-loop']).toBeUndefined()
   })
 
   it('drops a broken declaration even when the lockfile cannot be put back (#663 review)', async () => {

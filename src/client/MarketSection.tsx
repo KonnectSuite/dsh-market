@@ -5739,8 +5739,9 @@ export function MarketSection(props: MarketSectionProps) {
             {brokenPluginNames.map(name => (
               <div key={name} className={css.brokenPluginItem}>
                 <div className={css.brokenPluginText}>
-                  <b>{t('brokenPluginTitle').replace('{0}', name)}</b>
-                  <span>{t('brokenPluginBody')}</span>
+                  {/* A cancel saw no cause, so its notice names none (#663). */}
+                  <b>{t(brokenPlugins[name]?.reason === 'incomplete-build-cancelled' ? 'brokenPluginTitleCancelled' : 'brokenPluginTitle').replace('{0}', name)}</b>
+                  <span>{t(brokenPlugins[name]?.reason === 'incomplete-build-cancelled' ? 'brokenPluginBodyCancelled' : 'brokenPluginBody')}</span>
                 </div>
                 {/* Same road the replacement hint takes: search for it and
                     land on the catalog, where Install does the right thing. */}

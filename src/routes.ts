@@ -18,6 +18,7 @@ import { settingsNamespaceState } from './settings.ts'
 import {
   buildEnvFromUnknown, cleanHotDir, hotMount, hotUnmount, listHotMounts, MAX_BLOCKED, MAX_BLOCKED_NAME, MAX_FAVORITES, MAX_NOTE, MAX_UPDATE_EXEMPT,
   mountClientOnlyDeps, purgeMarketState, readMarketState, writeMarketState,
+  type BrokenReason,
 } from './hot.ts'
 import { createGroup, deleteGroup, removeFromGroups, renameGroup, setGroupMembers } from './groups.ts'
 import { dshHostInfo, findDshInstallDir } from './dsh-install.ts'
@@ -4337,7 +4338,7 @@ sendJson(response, 200, { updates })
             // declaration (#663). The client needs it in the ANSWER as well as
             // in state.json: the notice has to appear on the failure the user
             // is looking at, not only after a reload.
-            let removedDeclaration: { name: string; spec: string; reason: 'incomplete-build-locked' } | null = null
+            let removedDeclaration: { name: string; spec: string; reason: BrokenReason } | null = null
             // A non-zero exit or timeout can happen after pnpm has replaced
             // both package.json and node_modules. Restoring the manifest alone
             // leaves the rejected build running after restart. Reinstall the
@@ -4417,12 +4418,12 @@ sendJson(response, 200, { updates })
              * it. Acting on it here rather than inventing a second, narrower
              * probe keeps one answer to one question.
              */
-            const dropBrokenDeclaration = (reason: string): void => {
+            const dropBrokenDeclaration = (reason: string, kind: BrokenReason = 'incomplete-build-locked'): void => {
               const spec = manifestBefore.dependencies[name] ?? ''
               const dropped = dropFromManifest(config.profile, name, activeProfileDir)
               marketState.brokenPlugins = {
                 ...(marketState.brokenPlugins ?? {}),
-                [name]: { spec, reason: 'incomplete-build-locked', at: new Date().toISOString() },
+                [name]: { spec, reason: kind, at: new Date().toISOString() },
               }
               writeMarketState(activeProfileDir, marketState)
               // The log line is the durable record: the notice is per-session,
@@ -4466,6 +4467,24 @@ sendJson(response, 200, { updates })
                   hardFailureRollbackError = `${name} 更新失败，且更新前的构建未能验证恢复（${rollback.detail ?? 'unknown'}）；请先检查该 profile，再重新启动。 / ${name} update failed and restoration of the previous build could not be verified (${rollback.detail ?? 'unknown'}); inspect this profile before restarting.`
                   logEvent('error', 'update-rollback', `${name}: failed update command and restoration of the previous build could not be verified — ${rollback.detail ?? 'unknown'}`)
                 }
+              }
+            }
+            // A cancel is left as the user found it — except when it landed
+            // while pnpm was swapping the directory (#663). pnpm empties the
+            // target before it retries the rename, so a cancel at that point
+            // leaves the same declared-but-empty shell the open-file refusal
+            // above leaves, and the next start fails composition the same way:
+            // the reporter's Desktop crashed twice before its own recovery
+            // helper switched the plugin off. The branch above keys on pnpm's
+            // error text, which a cancelled run never produces, so it never
+            // ran. The question it asks does not depend on how the run ended —
+            // can this package still load? — so ask it here too. A cancel that
+            // left the previous build intact (the common case) is untouched.
+            if (cancelled && !hasLoadableEntry(activeProfileDir, name)) {
+              const kept = keepLockedBuild()
+              if (kept.missingEntry) {
+                dropBrokenDeclaration('the update was cancelled while pnpm was replacing the directory, and the previous build is incomplete', 'incomplete-build-cancelled')
+                removedDeclaration = { name, spec: manifestBefore.dependencies[name] ?? '', reason: 'incomplete-build-cancelled' }
               }
             }
             let ok = result.exitCode === 0 && !result.timedOut && !cancelled

@@ -3857,6 +3857,25 @@ describe('a plugin the market had to stop declaring (#663)', () => {
     brokenPlugins: { 'dsh-pet': { spec: '^1.4.0', reason: 'incomplete-build-locked', at: '2026-09-24T00:00:00.000Z' } },
   }
 
+  it('names no cause when the removal followed a cancel (#663)', async () => {
+    // A cancel that landed mid-swap leaves the same empty shell as the
+    // open-file refusal, but nothing told the market WHY pnpm was stuck. The
+    // locked wording ("the running DSH blocked the update") would state a
+    // cause that was never observed.
+    stubFetch({
+      '/dsh-market/installed': {
+        ...brokenInstalled,
+        brokenPlugins: { 'dsh-pet': { spec: '^1.4.0', reason: 'incomplete-build-cancelled', at: '2026-10-08T00:00:00.000Z' } },
+      },
+    })
+
+    render(<MarketSection {...props()} preferredSubsectionId="installed" />)
+
+    await screen.findByText(en.brokenPluginTitleCancelled.replace('{0}', 'dsh-pet'))
+    expect(screen.getByText(en.brokenPluginBodyCancelled)).toBeTruthy()
+    expect(screen.queryByText(en.brokenPluginBody)).toBeNull()
+  })
+
   it('says what happened instead of leaving the plugin silently gone', async () => {
     stubFetch({ '/dsh-market/installed': brokenInstalled })
 

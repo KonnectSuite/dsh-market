@@ -486,6 +486,8 @@ export const zh = {
   // nothing else in the UI can explain that.
   brokenPluginTitle: '{0} 更新失败后被移除了',
   brokenPluginBody: 'DSH 正在运行时无法更新，而更新前的版本也已经损坏。为避免下次启动卡住，市场把它从 profile 里移除。插件目录还在原处，退出 DSH 后重新安装即可。',
+  brokenPluginTitleCancelled: '{0} 取消更新后被移除了',
+  brokenPluginBodyCancelled: '取消时，旧版本已被清掉一部分。为避免下次启动卡住，市场把它从 profile 里移除。插件目录还在原处，重新安装即可；若再次失败，先退出 DSH 再装。',
   brokenPluginAction: '查找这个插件',
   // Says the message goes away and nothing else does. The plugin is still
   // uninstalled and its directory is still on disk — a button that read as a
@@ -1191,6 +1193,8 @@ export const en: Record<MarketKey, string> = {
   deprecatedWarn: 'This plugin is marked as deprecated by the catalog; new users are advised against installing it.',
   brokenPluginTitle: '{0} was removed after a failed update',
   brokenPluginBody: 'The running DSH blocked the update, and the version it was replacing was already damaged. The market removed it from the profile so the next start does not fail. Its directory is untouched — quit DSH and install it again.',
+  brokenPluginTitleCancelled: '{0} was removed after an update was cancelled',
+  brokenPluginBodyCancelled: 'The update was cancelled after the old version had been partly cleared. The market removed it from the profile so the next start does not fail. Its directory is untouched — install it again; if that fails, quit DSH first.',
   brokenPluginAction: 'Find this plugin',
   // "Stop showing this", deliberately not "Dismiss" alone and never anything
   // that implies the plugin is sorted: the same notice's other button is the
