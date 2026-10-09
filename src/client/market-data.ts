@@ -3,6 +3,7 @@
  * Market UI shares between its section and toast components.
  */
 
+import { isAryaReleaseSpec } from '../arya-release-spec.ts'
 import type { DiagnosticReportV1 } from '../diagnostics.ts'
 import { findCatalogEntryForLocal } from '../catalog-local-match.ts'
 export type { SharedHostPackageDependencyFinding } from '../diagnostics.ts'
@@ -35,7 +36,7 @@ export function api(path: string): string {
 
 export interface RegistryPlugin {
   arya?: boolean
-  releases?: { version: string; tarball: string }[]
+  releases?: { version: string; tarball: string; sha256: string }[]
   name: string
   owner: string
   url: string
@@ -188,6 +189,8 @@ export function isGenerationSpec(spec: string): boolean {
 
 /** Per-package update status from /dsh-market/updates. */
 export interface UpdateStatus {
+  /** Verified Arya release cache, not a development checkout. */
+  aryaRelease?: boolean
   updateAvailable?: boolean
   version?: string
   /** `github` | `npm` | `linked` | `generation` — the last is a host-managed
@@ -796,7 +799,7 @@ function repoRoots(ids: ReadonlySet<string>): Set<string> {
   return new Set([...ids].map(id => id.split('#path:/')[0]!))
 }
 function sameSourceConflict(plugin: RegistryPlugin, spec: string, repoIdentities: readonly string[] = []): boolean {
-  if (plugin.arya === true && plugin.releases?.some(release => release.tarball === spec)) return false
+  if (plugin.arya === true && (plugin.releases?.some(release => release.tarball === spec) || isAryaReleaseSpec(plugin, spec))) return false
   const entry = repoRoots(entryRepoIds(plugin))
   const dep = repoRoots(depRepoIds(spec, repoIdentities))
   if (entry.size === 0 || dep.size === 0) return false
@@ -869,7 +872,7 @@ export function matchInstalledName(
   const ids = entryIdentities(plugin)
   for (const [name, spec] of Object.entries(installed)) {
     const specStr = String(spec)
-    if (plugin.arya === true && plugin.name === name && plugin.releases?.some(release => release.tarball === specStr)) return name
+    if (plugin.arya === true && plugin.name === name && (plugin.releases?.some(release => release.tarball === specStr) || isAryaReleaseSpec(plugin, specStr))) return name
     const repos = repoIdentities[name] ?? []
     // Discover badges and theme cards share this helper. Local link:/file:
     // installs must use the same strict catalog row as restore and the
@@ -1526,6 +1529,8 @@ export function formatCount(n: number): string {
 export { findCatalogEntryForLocal, resolveCatalogRestore } from '../catalog-local-match.ts'
 export type { CatalogRestoreReason } from '../catalog-local-match.ts'
 
+const aryaCatalogNames = new WeakMap<RegistryPlugin[], Map<string, RegistryPlugin>>()
+
 /** Catalog row for an installed dependency — strict for local link:/file: specs. */
 export function catalogEntryForInstalled(
   plugins: RegistryPlugin[],
@@ -1534,8 +1539,13 @@ export function catalogEntryForInstalled(
   repoIdentities: readonly string[] = [],
   repoHints: readonly string[] = [],
 ): RegistryPlugin | undefined {
-  const arya = plugins.find(plugin => plugin.arya === true && plugin.name === name && (/^(?:link|file):/i.test(spec) || plugin.releases?.some(release => release.tarball === spec)))
-  if (arya !== undefined) return arya
+  let names = aryaCatalogNames.get(plugins)
+  if (names === undefined) {
+    names = new Map(plugins.filter(plugin => plugin.arya === true).map(plugin => [plugin.name, plugin]))
+    aryaCatalogNames.set(plugins, names)
+  }
+  const arya = names.get(name)
+  if (arya !== undefined && (/^(?:link|file):/i.test(spec) || arya.releases?.some(release => release.tarball === spec) || isAryaReleaseSpec(arya, spec))) return arya
   if (/^(?:link|file):/i.test(spec)) {
     return findCatalogEntryForLocal(plugins, name, repoIdentities, repoHints) ?? undefined
   }

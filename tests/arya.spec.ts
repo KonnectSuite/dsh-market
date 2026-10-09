@@ -9,7 +9,7 @@ import type { Registry } from '../src/registry.ts'
 function catalog(): Registry {
   return { updated: '', count: 1, categories: {}, plugins: [{
     name: 'dsh-example', owner: 'KonnectSuite', url: 'https://github.com/KonnectSuite/dsh-example', category: 'tools', description: {}, added: '', install: '', arya: true,
-    releases: ['0.2.0', '0.1.0'].map(version => ({ version, tarball: `https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-example-v${version}/dsh-example-${version}.tgz` })),
+    releases: ['0.2.0', '0.1.0'].map(version => ({ version, sha256: '0'.repeat(64), tarball: `https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-example-v${version}/dsh-example-${version}.tgz` })),
   }] }
 }
 let directory: string | undefined

@@ -1612,6 +1612,7 @@ function localPathOf(spec: string): string | null {
  * own install (#497) and is never one, even though its spec is a link:.
  */
 function isLocalDev(spec: string, status: UpdateStatus | undefined): boolean {
+  if (status?.aryaRelease === true) return false
   if (status?.kind === 'generation' || isGenerationSpec(spec)) return false
   return /^(?:link|file):/i.test(spec) || status?.kind === 'linked'
 }

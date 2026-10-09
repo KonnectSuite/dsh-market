@@ -1,7 +1,7 @@
 /** The official Electron profile is owned by DSH's in-process plugin manager. */
 
 import { randomUUID } from 'node:crypto'
-import { progress, TARGET_RE, type DesktopPluginRuntime, type InstallResult } from './dsh-cli.ts'
+import { progress, isPluginTarget, type DesktopPluginRuntime, type InstallResult } from './dsh-cli.ts'
 
 interface ManagedResult {
   application: string
@@ -69,7 +69,7 @@ export function createOfficialDesktopRuntime(
     // Market sends pnpm argv. Only operations representable by the official
     // manager are accepted; silently dropping pnpm flags would change intent.
     const [command, target, ...extra] = argv
-    if (extra.length !== 0 || typeof target !== 'string' || !TARGET_RE.test(target)) {
+    if (extra.length !== 0 || typeof target !== 'string' || !isPluginTarget(target)) {
       // The market's own options are what usually lands here, and they are
       // spelled with a leading `-` — and they sit in the TARGET slot, because
       // the market writes `add <option> <target>`. The OPERATION is supported
@@ -160,7 +160,7 @@ export function createOfficialDesktopRuntime(
       if (manager !== undefined) void manager.cancelInstall(active.requestId).catch(() => {})
       return true
     },
-    supportsExactRollbackTarget: target => TARGET_RE.test(target),
+    supportsExactRollbackTarget: target => isPluginTarget(target),
     // The reason the flag exists (#732): this manager takes exactly
     // `add <target>` or `remove <target>`, so every recovery step that needs
     // an option has to be left out here rather than sent and refused.

@@ -15,6 +15,8 @@ import { userPatchPackageReferences } from './patch.ts'
 import { catalogRepoKey, gitCommitOfTarget, gitRefOfTarget, gitUploadPackUrl, hostedRepoKey, githubCommitOfTarget, githubRefOfTarget, isGenerationLink, isGitHostedSpec, lookupRepoFromUrl, repoOfTarget } from './sources.ts'
 
 export interface UpdateStatus {
+  /** Verified Arya release staged as a local archive, not a development checkout. */
+  aryaRelease?: boolean
   /**
    * `generation` is a `link:` the desktop host wrote (#497): the host
    * installs it and reconciles it at startup, so the market names a newer

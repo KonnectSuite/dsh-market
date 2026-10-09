@@ -13,7 +13,9 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { load as loadYaml } from 'js-yaml'
-import { aryaReleaseTarget, bundledAryaVersion, validateAryaRegistry, validateCatalogUrl } from './arya.ts'
+import { AryaReleaseCancelled, aryaReleaseTarget, bundledAryaVersion, stageAryaRelease, resolveAryaDownloadLimits, validateAryaRegistry, validateCatalogUrl } from './arya.ts'
+import { isAryaReleaseSpec } from './arya-release-spec.ts'
+import type { RegistryPlugin } from './registry.ts'
 import { forgetCatalog, loadRegistry as loadCommunityRegistry, pluginCategories } from './registry.ts'
 import { settingsNamespaceState } from './settings.ts'
 import {
@@ -28,7 +30,7 @@ import { configurePersistentLog, exportLogs, logEvent, readPersistentLog } from 
 import { marketFetch } from './net.ts'
 import { diagnosePackageManifests } from './diagnostics.ts'
 import {
-  BOOT_ID, cancelActive, probePnpm, progress, provisionPnpm, runDshPlugin, setBuildEnvSource, TARGET_RE,
+  BOOT_ID, cancelActive, probePnpm, progress, provisionPnpm, runDshPlugin, setBuildEnvSource, isPluginTarget,
   type PluginCommandRuntime,
 } from './dsh-cli.ts'
 import { packageOfEntryName } from './entry-identity.ts'
@@ -132,6 +134,10 @@ export interface HostPluginActivation {
 export interface MarketConfig {
   /** Trusted publisher catalog; Arya updates use only its release archives. */
   catalogUrl?: string
+  /** Maximum release archive size in bytes; defaults to 64 MiB. */
+  maxReleaseBytes?: number
+  /** Total release download timeout in milliseconds; defaults to two minutes. */
+  releaseDownloadTimeoutMs?: number
   /** Profile the market installs into; matches the profile serving this UI. */
   profile: string
   /** Host-authoritative profile directory; ordinary DSH derives it from DSH_HOME. */
@@ -372,11 +378,13 @@ export function mountMarketRoutes(
   commandRuntime?: PluginCommandRuntime,
   agentsLookup?: AgentsLookup,
   hostActivation?: HostPluginActivation,
-): () => void {
+): () => void | Promise<void> {
   if (config.catalogUrl !== undefined) validateCatalogUrl(config.catalogUrl)
+  const releaseLimits = resolveAryaDownloadLimits(config)
   const loadRegistry = async () => {
-    const registry = await loadCommunityRegistry(undefined, config.catalogUrl)
-    return config.catalogUrl === undefined ? registry : validateAryaRegistry(registry)
+    const configuredCatalog = process.env.DSHM_REGISTRY_URL === undefined ? config.catalogUrl : undefined
+    const registry = await loadCommunityRegistry(undefined, configuredCatalog)
+    return configuredCatalog === undefined ? registry : validateAryaRegistry(registry)
   }
   let disposed = false
   // An ordinary profile must resolve under DSH_HOME by the same rules as the
@@ -395,6 +403,24 @@ export function mountMarketRoutes(
     throw new Error(message)
   }
   const activeProfileDir = profileDir(config.profile, config.profileDirectory)
+  let releaseDownload: { controller: AbortController; done: Promise<string> } | undefined
+  const prepareAryaRelease = async (plugin: RegistryPlugin, version: string): Promise<string> => {
+    const controller = new AbortController()
+    const done = stageAryaRelease(plugin, version, activeProfileDir, releaseLimits, controller.signal)
+    const active = { controller, done }
+    releaseDownload = active
+    progress.active = true
+    progress.target = plugin.name
+    progress.startedAt = Date.now()
+    progress.lastLine = '下载并验证 Arya 发布版本 / Downloading and verifying Arya release'
+    try { const target = await done; controller.signal.throwIfAborted(); return target } catch (error) {
+      if (controller.signal.aborted) throw new AryaReleaseCancelled()
+      throw error
+    } finally {
+      if (releaseDownload === active) releaseDownload = undefined
+      progress.active = false
+    }
+  }
   const analyzeActiveProfile = () => analyzeProfile(activeProfileDir, {
     ...(config.dshInstallDir === undefined ? {} : { dshInstallDir: config.dshInstallDir }),
   })
@@ -460,7 +486,7 @@ export function mountMarketRoutes(
    */
   const marketFlags = commands.acceptsMarketPnpmFlags !== false
   const supportsExactRollbackTarget = (target: string): boolean =>
-    commands.supportsExactRollbackTarget?.(target) ?? TARGET_RE.test(target)
+    commands.supportsExactRollbackTarget?.(target) ?? isPluginTarget(target)
   // Point every plugin build/install spawn at the configured build
   // environment (#336). Read LIVE from `config.buildEnv` because the settings
   // wiring mutates that object when the operator edits the section at runtime;
@@ -3617,8 +3643,9 @@ export function mountMarketRoutes(
               if (spec === undefined) continue
               const version = readInstalledVersion(config.profile, plugin.name, activeProfileDir)
               const latest = plugin.releases?.[0]?.version ?? null
-              const local = isLocalSpec(spec)
-              updates[plugin.name] = { kind: local ? 'linked' : 'npm', version, current: version, latest, updateAvailable: version !== null && latest !== null && isUpgrade(version, latest), ...(local ? { restoreRequired: true } : {}) }
+              const managedRelease = isAryaReleaseSpec(plugin, spec)
+              const local = isLocalSpec(spec) && !managedRelease
+              updates[plugin.name] = { kind: local ? 'linked' : 'npm', version, current: version, latest, updateAvailable: version !== null && latest !== null && isUpgrade(version, latest), ...(local ? { restoreRequired: true } : {}), ...(managedRelease ? { aryaRelease: true } : {}) }
             }
             for (const name of SELF_NAMES) if (updates[name] !== undefined) updates[name] = { ...updates[name], updateAvailable: false }
           }
@@ -3930,17 +3957,20 @@ sendJson(response, 200, { updates })
             }
             let selectedRelease: string | null = null
             let selectedReleaseVersion: string | null = null
+            let selectedPlugin: RegistryPlugin | undefined
             if (config.catalogUrl !== undefined) {
               const entry = (await loadRegistry()).plugins.find(plugin => plugin.name === name)
               if (entry !== undefined) {
-                if (isLocalSpec(spec) && !restore && body.releaseVersion === undefined && body.bundled !== true) {
+                selectedPlugin = entry
+                const managedRelease = isAryaReleaseSpec(entry, spec)
+                if (isLocalSpec(spec) && !managedRelease && !restore && body.releaseVersion === undefined && body.bundled !== true) {
                   sendJson(response, 400, { error: 'Choose a released version explicitly to replace this local plugin' })
                   return
                 }
                 const samePublishedSource = entry.releases?.some(release => release.tarball === spec) === true
                 const repo = repoOfTarget(spec)?.split('#')[0]?.toLowerCase()
                 const sameRepository = repo !== undefined && entry.url.toLowerCase() === `https://github.com/${repo}`
-                if (!isLocalSpec(spec) && !samePublishedSource && !sameRepository && body.releaseVersion === undefined && body.bundled !== true && !restore) {
+                if (!isLocalSpec(spec) && !managedRelease && !samePublishedSource && !sameRepository && body.releaseVersion === undefined && body.bundled !== true && !restore) {
                   sendJson(response, 400, { error: 'Choose a released version explicitly to switch this plugin source' })
                   return
                 }
@@ -4251,7 +4281,9 @@ sendJson(response, 200, { updates })
             // `github:owner/repo` untouched, so passing a restore through it
             // still gets a China-region mirror where one applies and changes
             // nothing where one does not.
-            const target = restore
+            const target = selectedPlugin !== undefined && selectedReleaseVersion !== null
+              ? await prepareAryaRelease(selectedPlugin, selectedReleaseVersion)
+              : restore
               ? (NPM_NAME_RE.test(spec) ? `${spec}@${tag}` : await acceleratedTarget(spec, region))
               : usesNpmUpdateTarget
                 ? (expectedNpmVersion !== null ? `${name}@${expectedNpmVersion}` : `${name}@${tag}`)
@@ -4661,6 +4693,7 @@ sendJson(response, 200, { updates })
                 // the checkout already sat on the same version as latest.
                 const afterSpec = readInstalled(config.profile, activeProfileDir)[name]
                 const stillLocal = afterSpec !== undefined && isLocalSpec(afterSpec)
+                  && (selectedPlugin === undefined || !isAryaReleaseSpec(selectedPlugin, afterSpec))
                 if (stillLocal) ok = false
               } else {
                 stale = isStaleUpdate({
@@ -4968,6 +5001,7 @@ sendJson(response, 200, { updates })
             })
           })
         } catch (error) {
+          if (error instanceof AryaReleaseCancelled) { sendJson(response, 200, { ok: false, cancelled: true }); return }
           const message = error instanceof Error ? error.message : String(error)
           host.logger?.warn(`[dsh-market] update failed: ${message}`)
           logEvent('error', 'update', `route error: ${message}`)
@@ -5539,6 +5573,11 @@ sendJson(response, 200, { updates })
           return
         }
         // Cancel flow contributed in #6 by @qichuang321.
+        if (releaseDownload !== undefined) {
+          releaseDownload.controller.abort(new AryaReleaseCancelled())
+          sendJson(response, 200, { ok: true, cancelled: true, target: progress.target })
+          return
+        }
         if (!commands.cancelActive()) {
           sendJson(response, 400, { error: 'no operation is running' })
           return
@@ -5915,7 +5954,9 @@ sendJson(response, 200, { updates })
             // Applied HERE, before the guards below, so every step downstream
             // reasons about the exact spec that will be installed. Returns
             // the original on any lookup failure (see accelerate.ts).
-            let target = await acceleratedTarget(pinnedTarget, region)
+            let target = entry.arya === true
+              ? await prepareAryaRelease(entry, entry.releases!.find(release => release.tarball === plainTarget)!.version)
+              : await acceleratedTarget(pinnedTarget, region)
             if (target !== pinnedTarget) {
               logEvent('info', 'region', `${entry.name}: resolved HEAD through an available ${region} route; downloading the commit-pinned GitHub target directly for pnpm integrity`)
             }
@@ -6354,6 +6395,7 @@ sendJson(response, 200, { updates })
             })
           })
         } catch (error) {
+          if (error instanceof AryaReleaseCancelled) { sendJson(response, 200, { ok: false, cancelled: true }); return }
           const message = error instanceof Error ? error.message : String(error)
           host.logger?.warn(`[dsh-market] install failed: ${message}`)
           logEvent('error', 'install', `route error: ${message}`)
@@ -6365,8 +6407,11 @@ sendJson(response, 200, { updates })
 
   return () => {
     disposed = true
+    const downloading = releaseDownload
+    downloading?.controller.abort(new AryaReleaseCancelled())
     setBuildEnvSource(previousBuildEnvSource)
     configurePersistentLog(null)
     for (const dispose of disposers) dispose()
+    if (downloading !== undefined) return downloading.done.then(() => {}, () => {})
   }
 }

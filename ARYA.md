@@ -14,6 +14,10 @@ The market itself is pinned by Arya and updated with the application. It cannot 
 
 插件市场本身由 Arya 固定，并随应用更新，不会将自身替换成上游 npm 包。配置中已有的社区插件仍由现有更新和移除服务管理；Arya 目录不接管这些插件。
 
+Downloads are checked against the catalog's SHA256 before installation and cached by checksum in the active profile. Cached packages are verified again before reuse. Cancel stops a pending download before the installer starts. Configure `maxReleaseBytes` (64 MiB by default) and `releaseDownloadTimeoutMs` (120,000 ms by default) to adjust download limits.
+
+安装前会根据目录中的 SHA256 校验下载内容，并按校验和缓存到当前配置中。缓存包在再次使用前会重新校验。取消操作会在安装程序启动前停止待处理的下载。通过 `maxReleaseBytes`（默认 64 MiB）和 `releaseDownloadTimeoutMs`（默认 120,000 毫秒）可调整下载限制。
+
 ## Publishing a plugin
 
 Build and test the plugin, increment its package version, and pack its built files. From this repository, run the following command with its tarball and source repository. New entries also require `--description` and `--description-zh`. Omit `--publish` to validate and prepare a catalog entry without publishing. The publisher rejects credential filenames, unresolved local dependencies, missing built entry points, and replacement of an existing version with different bytes.
@@ -24,9 +28,9 @@ Build and test the plugin, increment its package version, and pack its built fil
 npm run publish:arya -- --tarball /path/to/dsh-example-0.2.0.tgz --source KonnectSuite/dsh-example --publish
 ```
 
-The publisher creates a draft release, uploads the archive, verifies GitHub's SHA256 digest and byte count, and publishes it. Commit and push `data/arya-plugins.json` on `codex/arya-plugin-market` after successful validation. Keep previous release records and assets: they provide version restoration. The default catalog URL names this branch; hosts can override `catalogUrl` in the market's configuration using another trusted HTTPS catalog with the same release format. Catalog failures are reported instead of showing an unverified stale catalog.
+The publisher creates a draft release, uploads the archive, verifies GitHub's SHA256 digest and byte count, and publishes it. Commit and push `data/arya-plugins.json` on `codex/arya-plugin-market` after successful validation. Keep previous release records and assets: they provide version restoration. The default catalog URL names this branch; hosts can override `catalogUrl` in the market's configuration using another trusted HTTPS catalog with the same release format. Catalog failures are reported instead of showing an unverified stale catalog. The existing process-only `DSHM_REGISTRY_URL` override remains available for administrator-controlled catalogs and isolated upstream fixtures.
 
-发布工具创建草稿发布、上传压缩包、核对 GitHub 的 SHA256 摘要和字节数，再公开发布。验证成功后，在 `codex/arya-plugin-market` 分支提交并推送 `data/arya-plugins.json`。保留旧版本记录和发布资源，以支持版本恢复。默认目录地址指向该分支；主程序可通过市场配置的 `catalogUrl` 指定采用相同发布格式的其他可信 HTTPS 目录。目录读取失败会显示错误，不会提供未经确认的过期目录。
+发布工具创建草稿发布、上传压缩包、核对 GitHub 的 SHA256 摘要和字节数，再公开发布。验证成功后，在 `codex/arya-plugin-market` 分支提交并推送 `data/arya-plugins.json`。保留旧版本记录和发布资源，以支持版本恢复。默认目录地址指向该分支；主程序可通过市场配置的 `catalogUrl` 指定采用相同发布格式的其他可信 HTTPS 目录。目录读取失败会显示错误，不会提供未经确认的过期目录。仅限进程配置的 `DSHM_REGISTRY_URL` 覆盖仍可用于管理员提供的目录及隔离的上游测试。
 
 ## Validation
 

@@ -1129,6 +1129,12 @@ export const BOOT_ID = `${String(process.pid)}-${String(Date.now())}`
  */
 export const TARGET_RE = /^[A-Za-z0-9@:./_#+~^=-]+$/
 
+/** Package targets may include spaces only inside an absolute local archive path. */
+export function isPluginTarget(target: string): boolean {
+  return TARGET_RE.test(target) || (/^file:(?:[A-Za-z]:[/\\]|\/)/.test(target)
+    && /^file:[\p{L}\p{M}\p{N} @:./_#~+=\\-]+\.tgz$/u.test(target))
+}
+
 /** Mutating pnpm commands get the structured reporter appended. */
 const NDJSON_COMMANDS = new Set(['add', 'remove', 'install', 'update'])
 
@@ -1139,7 +1145,7 @@ function preparePluginArgs(profileDirectory: string, pluginArgs: readonly string
 } | { error: string } {
   let args = pluginArgsFor(profileDirectory, [...pluginArgs])
   const target = args[args.length - 1] ?? ''
-  if (!TARGET_RE.test(target)) {
+  if (!isPluginTarget(target)) {
     return { error: `unsafe plugin target rejected: ${JSON.stringify(target)}` }
   }
   if (NDJSON_COMMANDS.has(args[0])) args = [...args, '--reporter=ndjson']
@@ -1429,7 +1435,7 @@ export function createDesktopPluginRuntime(
     // Anywhere Labs' optional external boundary accepts exact npm targets
     // only. Every Desktop host without that boundary retains the ordinary
     // CLI grammar, including immutable Git and archive targets.
-    supportsExactRollbackTarget: target => TARGET_RE.test(target)
+    supportsExactRollbackTarget: target => isPluginTarget(target)
       && (service.runExternalMarketPluginInstall === undefined || EXACT_NPM_TARGET_RE.test(target)),
     // The service is backed by Desktop's packaged pnpm; system discovery and
     // global provisioning are neither needed nor allowed in this mode.

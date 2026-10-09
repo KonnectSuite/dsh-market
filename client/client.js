@@ -1601,6 +1601,18 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			recoveryTimeout: "Timed out waiting for DeepSeek Harness to start. \"Adjust plugins\" can tell you whether one of them is what stops it."
 		};
 		//#endregion
+		//#region src/arya-release-spec.ts
+		/** Content-addressed file name for a published package. */
+		function aryaReleaseFile(name, release) {
+			return `${name.replace(/^@/, "").replaceAll("/", "-")}-${release.version}-${release.sha256}.tgz`;
+		}
+		/** Recognize a market-owned release cache spec instead of a development checkout. */
+		function isAryaReleaseSpec(plugin, spec) {
+			if (!spec.startsWith("file:")) return false;
+			const normalized = spec.replaceAll("\\", "/");
+			return plugin.releases?.some((release) => normalized.endsWith(`/.dsh-market/releases/${aryaReleaseFile(plugin.name, release)}`)) === true;
+		}
+		//#endregion
 		//#region src/catalog-local-match.ts
 		/**
 		* Catalog matching for locally linked / file: installs. Shared by the host
@@ -1768,6 +1780,10 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 		}
 		//#endregion
 		//#region src/client/market-data.ts
+		/**
+		* Response shapes of the /dsh-market/* host routes plus the pure helpers the
+		* Market UI shares between its section and toast components.
+		*/
 		/** One registry entry from /dsh-market/registry. */
 		/**
 		* Resolve a market API path against the page the UI is served from.
@@ -2165,7 +2181,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			return new Set([...ids].map((id) => id.split("#path:/")[0]));
 		}
 		function sameSourceConflict(plugin, spec, repoIdentities = []) {
-			if (plugin.arya === true && plugin.releases?.some((release) => release.tarball === spec)) return false;
+			if (plugin.arya === true && (plugin.releases?.some((release) => release.tarball === spec) || isAryaReleaseSpec(plugin, spec))) return false;
 			const entry = repoRoots(entryRepoIds(plugin));
 			const dep = repoRoots(depRepoIds(spec, repoIdentities));
 			if (entry.size === 0 || dep.size === 0) return false;
@@ -2223,7 +2239,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			const ids = entryIdentities(plugin);
 			for (const [name, spec] of Object.entries(installed)) {
 				const specStr = String(spec);
-				if (plugin.arya === true && plugin.name === name && plugin.releases?.some((release) => release.tarball === specStr)) return name;
+				if (plugin.arya === true && plugin.name === name && (plugin.releases?.some((release) => release.tarball === specStr) || isAryaReleaseSpec(plugin, specStr))) return name;
 				const repos = repoIdentities[name] ?? [];
 				if (/^(?:link|file):/i.test(specStr)) {
 					if (plugins === void 0) continue;
@@ -2726,10 +2742,16 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 			const k = Math.round(n / 100) / 10;
 			return `${Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)}k`;
 		}
+		const aryaCatalogNames = /* @__PURE__ */ new WeakMap();
 		/** Catalog row for an installed dependency — strict for local link:/file: specs. */
 		function catalogEntryForInstalled(plugins, name, spec, repoIdentities = [], repoHints = []) {
-			const arya = plugins.find((plugin) => plugin.arya === true && plugin.name === name && (/^(?:link|file):/i.test(spec) || plugin.releases?.some((release) => release.tarball === spec)));
-			if (arya !== void 0) return arya;
+			let names = aryaCatalogNames.get(plugins);
+			if (names === void 0) {
+				names = new Map(plugins.filter((plugin) => plugin.arya === true).map((plugin) => [plugin.name, plugin]));
+				aryaCatalogNames.set(plugins, names);
+			}
+			const arya = names.get(name);
+			if (arya !== void 0 && (/^(?:link|file):/i.test(spec) || arya.releases?.some((release) => release.tarball === spec) || isAryaReleaseSpec(arya, spec))) return arya;
 			if (/^(?:link|file):/i.test(spec)) return findCatalogEntryForLocal(plugins, name, repoIdentities, repoHints) ?? void 0;
 			return entryForDep(plugins, name, spec, repoIdentities, repoHints);
 		}
@@ -7897,6 +7919,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 		* own install (#497) and is never one, even though its spec is a link:.
 		*/
 		function isLocalDev(spec, status) {
+			if (status?.aryaRelease === true) return false;
 			if (status?.kind === "generation" || isGenerationSpec(spec)) return false;
 			return /^(?:link|file):/i.test(spec) || status?.kind === "linked";
 		}

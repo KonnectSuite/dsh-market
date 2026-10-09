@@ -199,6 +199,15 @@ describe('profile the launcher booted (#639)', () => {
     expect(state.mounts[0].config.dshInstallDir).toBe('/Applications/DSH.app/Contents/Resources/app.asar/dsh')
   })
 
+  it('passes the installation anchor for ordinary Web version restoration', () => {
+    const ctx = new FakeContext({ webServer: {}, loader: {}, profileContext: {
+      name: 'web', dir: '/home/u/.dsh/profiles/web', installAnchor: '/opt/arya/package.json',
+    } })
+    apply(ctx as never)
+    expect(state.mounts[0].config.dshInstallDir).toBe('/opt/arya')
+    expect(state.mounts[0].config.catalogUrl).toContain('KonnectSuite/dsh-market')
+  })
+
   it('lets an explicit cordis.yml profile win, and never carries the other profile\'s directory', () => {
     const ctx = new FakeContext({ webServer: {}, loader: {}, profileContext: launcher })
 

@@ -6,18 +6,23 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mountMarketRoutes } from '../src/routes.ts'
 import type { PluginCommandRuntime } from '../src/dsh-cli.ts'
+import { stageAryaRelease } from '../src/arya.ts'
 import { forgetCatalog } from '../src/registry.ts'
 
 const versions = ['0.2.0', '0.1.0']
 const target = (version: string) => `https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-example-v${version}/dsh-example-${version}.tgz`
 vi.mock('../src/registry.ts', async importOriginal => {
   const original = await importOriginal<typeof import('../src/registry.ts')>()
-  return { ...original, loadRegistry: async () => ({ updated: '', count: 1, categories: {}, plugins: [{ name: 'dsh-example', owner: 'KonnectSuite', url: 'https://github.com/KonnectSuite/dsh-example', arya: true, category: 'arya', description: {}, install: '', added: '', releases: versions.map(version => ({ version, tarball: target(version) })) }] }) }
+  return { ...original, loadRegistry: async () => ({ updated: '', count: 1, categories: {}, plugins: [{ name: 'dsh-example', owner: 'KonnectSuite', url: 'https://github.com/KonnectSuite/dsh-example', arya: true, category: 'arya', description: {}, install: '', added: '', releases: versions.map(version => ({ version, sha256: '0'.repeat(64), tarball: target(version) })) }] }) }
+})
+vi.mock('../src/arya.ts', async importOriginal => {
+  const original = await importOriginal<typeof import('../src/arya.ts')>()
+  return { ...original, stageAryaRelease: vi.fn(async (_plugin: unknown, version: string) => target(version)) }
 })
 let directory: string
 let server: Server
 let base: string
-let dispose: () => void
+let dispose: () => void | Promise<void>
 const runPlugin = vi.fn<PluginCommandRuntime['runPlugin']>(async () => ({ exitCode: 1, stdout: '', stderr: 'fixture install refused', timedOut: false, cancelled: false }))
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'arya-market-routes-'))
@@ -35,7 +40,7 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${address.port}`
 })
 afterEach(async () => {
-  dispose?.()
+  await dispose?.()
   if (server) await new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections() })
   rmSync(directory, { recursive: true, force: true }); runPlugin.mockClear(); forgetCatalog()
 })
@@ -63,5 +68,20 @@ it.each([{ releaseVersion: '0.1.0' }, { bundled: true }])('sends the exact chose
 })
 it('rejects a cross-origin release change', async () => {
   expect((await post({ name: 'dsh-example', releaseVersion: '0.1.0' }, 'https://untrusted.example')).status).toBe(403)
+  expect(runPlugin).not.toHaveBeenCalled()
+})
+
+it('cancels release preparation before any package command starts', async () => {
+  let started!: () => void
+  const ready = new Promise<void>(resolve => { started = resolve })
+  vi.mocked(stageAryaRelease).mockImplementationOnce(async (_plugin, _version, _directory, _limits, signal) => new Promise<string>((_resolve, reject) => {
+    signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+    started()
+  }))
+  const updating = post({ name: 'dsh-example', releaseVersion: '0.1.0' })
+  await ready
+  const cancelled = await fetch(`${base}/dsh-market/cancel`, { method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: '{}' })
+  expect(cancelled.status).toBe(200)
+  expect(await (await updating).json()).toMatchObject({ ok: false, cancelled: true })
   expect(runPlugin).not.toHaveBeenCalled()
 })

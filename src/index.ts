@@ -3,7 +3,7 @@
  * composes the webServer and shell services.
  */
 
-import { ARYA_CATALOG_URL, validateCatalogUrl } from './arya.ts'
+import { ARYA_CATALOG_URL, resolveAryaDownloadLimits, validateCatalogUrl } from './arya.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { dirname, isAbsolute } from 'node:path'
 import { createDesktopPluginRuntime, setHostPackageManager, type DesktopPnpmLike, type HostPackageManager } from './dsh-cli.ts'
@@ -17,7 +17,7 @@ import type { AgentsServiceLike } from './agents.ts'
 export const name = 'dsh-market'
 
 /** Optional cordis.yml configuration; profile defaults to `web`. */
-export type Config = Partial<Pick<MarketConfig, 'profile' | 'allowRestart' | 'maxSnapshots' | 'buildEnv' | 'catalogUrl'>>
+export type Config = Partial<Pick<MarketConfig, 'profile' | 'allowRestart' | 'maxSnapshots' | 'buildEnv' | 'catalogUrl' | 'maxReleaseBytes' | 'releaseDownloadTimeoutMs'>>
 
 /**
  * Structural subset of the dsh launcher's public `profileContext` service —
@@ -208,6 +208,7 @@ export function useTrustedHosts(ctx: Context): () => void {
 
 export function apply(ctx: Context, config?: Config): void {
   validateCatalogUrl(config?.catalogUrl ?? ARYA_CATALOG_URL)
+  resolveAryaDownloadLimits(config ?? {})
   ctx.inject(['webServer', 'loader'], (hostCtx: Context) => {
     const host = hostCtx as unknown as MarketEffectHost
     const desktopProfiles = ctx.get('desktopProfiles') as DesktopProfilesLike | undefined
@@ -275,6 +276,8 @@ export function apply(ctx: Context, config?: Config): void {
           // exists for (a GUI launch inherits no shell environment).
           buildEnv: config?.buildEnv,
           catalogUrl: config?.catalogUrl ?? ARYA_CATALOG_URL,
+          maxReleaseBytes: config?.maxReleaseBytes,
+          releaseDownloadTimeoutMs: config?.releaseDownloadTimeoutMs,
           ...(typeof profileContext?.installAnchor === 'string' && isAbsolute(profileContext.installAnchor)
             ? { dshInstallDir: dirname(profileContext.installAnchor) } : {}),
         }
@@ -283,7 +286,7 @@ export function apply(ctx: Context, config?: Config): void {
           const restoreTrustedHosts = useTrustedHosts(ctx)
           const disposeRoutes = mountMarketRoutes(host, resolved, runtime, agentsLookupOf(ctx))
           return async () => {
-            disposeRoutes()
+            await disposeRoutes()
             restoreTrustedHosts()
             await runtime.dispose()
           }
@@ -315,7 +318,11 @@ export function apply(ctx: Context, config?: Config): void {
         // Build-time environment (#336); undefined means "inherit", and the
         // settings wiring below is what makes it editable at runtime.
         buildEnv: config?.buildEnv,
-          catalogUrl: config?.catalogUrl ?? ARYA_CATALOG_URL,
+        catalogUrl: config?.catalogUrl ?? ARYA_CATALOG_URL,
+        maxReleaseBytes: config?.maxReleaseBytes,
+        releaseDownloadTimeoutMs: config?.releaseDownloadTimeoutMs,
+        ...(typeof profileContext?.installAnchor === 'string' && isAbsolute(profileContext.installAnchor)
+          ? { dshInstallDir: dirname(profileContext.installAnchor) } : {}),
       }
       // Web settings may control restart; Desktop only registers the card's
       // namespace below. Both no-op on a host without a settings service.
@@ -323,8 +330,8 @@ export function apply(ctx: Context, config?: Config): void {
       host.effect(() => {
         const restoreTrustedHosts = useTrustedHosts(ctx)
         const disposeRoutes = mountMarketRoutes(host, resolved, undefined, agentsLookupOf(ctx))
-        return () => {
-          disposeRoutes()
+        return async () => {
+          await disposeRoutes()
           restoreTrustedHosts()
         }
       }, 'dsh-market: http routes')
@@ -338,6 +345,7 @@ export function apply(ctx: Context, config?: Config): void {
     // Ordinary DSH keeps the existing CLI path above.
     hostCtx.inject(['desktopPnpm'], (desktopCtx: Context) => {
       const current = desktopProfiles.current
+      const profileContext = desktopCtx.get('profileContext') as ProfileContextLike | undefined
       const service = (desktopCtx as unknown as { desktopPnpm: DesktopPnpmLike }).desktopPnpm
       const runtime = createDesktopPluginRuntime(service, current.dir)
       const resolved: MarketConfig = {
@@ -359,7 +367,11 @@ export function apply(ctx: Context, config?: Config): void {
         // The operator's pinned build environment applies in Desktop mode
         // too: Desktop's packaged pnpm still runs plugin build scripts.
         buildEnv: config?.buildEnv,
-          catalogUrl: config?.catalogUrl ?? ARYA_CATALOG_URL,
+        catalogUrl: config?.catalogUrl ?? ARYA_CATALOG_URL,
+        maxReleaseBytes: config?.maxReleaseBytes,
+        releaseDownloadTimeoutMs: config?.releaseDownloadTimeoutMs,
+        ...(typeof profileContext?.installAnchor === 'string' && isAbsolute(profileContext.installAnchor)
+          ? { dshInstallDir: dirname(profileContext.installAnchor) } : {}),
       }
       const desktopHost = desktopCtx as unknown as MarketEffectHost
       installDesktopMarketSettings(desktopCtx)
@@ -369,7 +381,7 @@ export function apply(ctx: Context, config?: Config): void {
         // market can ask for a replay instead of mounting a second entry.
         const disposeRoutes = mountMarketRoutes(host, resolved, runtime, agentsLookupOf(ctx), desktopProfiles.pluginActivation)
         return async () => {
-          disposeRoutes()
+          await disposeRoutes()
           await runtime.dispose()
         }
       }, 'dsh-market: Desktop http routes and package operations')
