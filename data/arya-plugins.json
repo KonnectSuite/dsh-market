@@ -1,6 +1,6 @@
 {
-  "updated": "2026-10-09T12:01:14.807Z",
-  "count": 6,
+  "updated": "2026-10-09T22:49:12.173Z",
+  "count": 7,
   "categories": {
     "arya": {
       "en": "Arya",
@@ -22,6 +22,11 @@
       "arya": true,
       "releases": [
         {
+          "version": "0.2.4",
+          "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.4/dsh-native-window-0.2.4.tgz",
+          "sha256": "661cf4b8ea963f354991dfe2df8a3a3f91f9010c4b1d2afb91023b3319ff1806"
+        },
+        {
           "version": "0.2.3",
           "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.3/dsh-native-window-0.2.3.tgz",
           "sha256": "6279535736eb6cfcd4b2b5d4d289db0189208019cacf71af1e5d4ff308595d86"
@@ -37,8 +42,8 @@
           "sha256": "4b72c5994c689eee949b71dd8b53464605457e953ffcaca9bb4e131cfb1db47e"
         }
       ],
-      "version": "0.2.3",
-      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.3/dsh-native-window-0.2.3.tgz"
+      "version": "0.2.4",
+      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.4/dsh-native-window-0.2.4.tgz"
     },
     {
       "name": "dsh-local-llm",
@@ -154,6 +159,31 @@
       ],
       "version": "0.1.7",
       "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-projects-v0.1.7/dsh-projects-0.1.7.tgz"
+    },
+    {
+      "name": "dsh-clear-light",
+      "owner": "KonnectSuite",
+      "url": "https://github.com/KonnectSuite/dsh-clear-light",
+      "category": [
+        "arya",
+        "theme"
+      ],
+      "description": {
+        "en": "Clearer navigation, surfaces, selections and text",
+        "zh": "更清晰的导航、面板、选中状态与文字"
+      },
+      "added": "2026-10-09",
+      "install": "",
+      "arya": true,
+      "releases": [
+        {
+          "version": "0.1.0",
+          "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-clear-light-v0.1.0/dsh-clear-light-0.1.0.tgz",
+          "sha256": "0d5a79d85ca9a36bb90f4f6f2950dc9678793c3c6b155cb1a67ac452ba94eb45"
+        }
+      ],
+      "version": "0.1.0",
+      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-clear-light-v0.1.0/dsh-clear-light-0.1.0.tgz"
     }
   ]
 }
