@@ -13,7 +13,8 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { load as loadYaml } from 'js-yaml'
-import { forgetCatalog, loadRegistry, pluginCategories } from './registry.ts'
+import { aryaReleaseTarget, bundledAryaVersion, validateAryaRegistry, validateCatalogUrl } from './arya.ts'
+import { forgetCatalog, loadRegistry as loadCommunityRegistry, pluginCategories } from './registry.ts'
 import { settingsNamespaceState } from './settings.ts'
 import {
   buildEnvFromUnknown, cleanHotDir, hotMount, hotUnmount, listHotMounts, MAX_BLOCKED, MAX_BLOCKED_NAME, MAX_FAVORITES, MAX_NOTE, MAX_UPDATE_EXEMPT,
@@ -129,6 +130,8 @@ export interface HostPluginActivation {
 }
 
 export interface MarketConfig {
+  /** Trusted publisher catalog; Arya updates use only its release archives. */
+  catalogUrl?: string
   /** Profile the market installs into; matches the profile serving this UI. */
   profile: string
   /** Host-authoritative profile directory; ordinary DSH derives it from DSH_HOME. */
@@ -370,6 +373,11 @@ export function mountMarketRoutes(
   agentsLookup?: AgentsLookup,
   hostActivation?: HostPluginActivation,
 ): () => void {
+  if (config.catalogUrl !== undefined) validateCatalogUrl(config.catalogUrl)
+  const loadRegistry = async () => {
+    const registry = await loadCommunityRegistry(undefined, config.catalogUrl)
+    return config.catalogUrl === undefined ? registry : validateAryaRegistry(registry)
+  }
   let disposed = false
   // An ordinary profile must resolve under DSH_HOME by the same rules as the
   // DSH CLI. A host-authoritative explicit directory (DSH Desktop) does not
@@ -1767,7 +1775,7 @@ export function mountMarketRoutes(
    * — a developer's own `link:` checkout is never compared online.
    */
   const onlineSourceOf = (
-    plugins: Awaited<ReturnType<typeof loadRegistry>>['plugins'],
+    plugins: Awaited<ReturnType<typeof loadCommunityRegistry>>['plugins'],
     name: string,
     spec: string,
   ): string | null => {
@@ -2333,6 +2341,21 @@ export function mountMarketRoutes(
         } finally {
           clearTimeout(timer)
         }
+      },
+    }),
+
+    registerRoute({
+      kind: 'exact',
+      path: '/dsh-market/arya-versions',
+      handler: async (request, response) => {
+        if (request.method !== 'GET') { response.writeHead(405, { allow: 'GET' }); response.end(); return }
+        try {
+          const name = new URL(request.url ?? '', 'http://localhost').searchParams.get('name')
+          const entry = (await loadRegistry()).plugins.find(plugin => plugin.arya === true && plugin.name === name)
+          if (entry === undefined) { sendJson(response, 404, { error: 'Plugin is not in the Arya release catalog' }); return }
+          const bundled = bundledAryaVersion(config.dshInstallDir, entry.name)
+          sendJson(response, 200, { name, releases: entry.releases?.map(release => ({ version: release.version })), bundled: entry.releases?.some(release => release.version === bundled) ? bundled : null })
+        } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }) }
       },
     }),
 
@@ -3481,7 +3504,7 @@ export function mountMarketRoutes(
           // Deliberately NOT folded into `restart`, which is also what the
           // settings page reads and writes back as the user's own choice.
           restartReachable: restartReachableFrom(request),
-          selfManaged: installed.dshmarket !== undefined || installed['dsh-market'] !== undefined,
+          selfManaged: config.catalogUrl === undefined && (installed.dshmarket !== undefined || installed['dsh-market'] !== undefined),
           // Whether the host took the market's settings namespace (#677).
           // `unsupported-by-host` is 0.1.7 and newer, where settings come from
           // a plugin's Config schema and no third-party namespace is served —
@@ -3586,6 +3609,19 @@ export function mountMarketRoutes(
             logEvent('warn', 'updates', `package source lookup failed — ${error instanceof Error ? error.message : String(error)}`)
           }
           const updates = await checkUpdates(config.profile, force, activeProfileDir, channelFor, onlineSourceFor, catalogNpmByRepo)
+          if (config.catalogUrl !== undefined) {
+            const registry = await loadRegistry()
+            const installed = readInstalled(config.profile, activeProfileDir)
+            for (const plugin of registry.plugins) {
+              const spec = installed[plugin.name]
+              if (spec === undefined) continue
+              const version = readInstalledVersion(config.profile, plugin.name, activeProfileDir)
+              const latest = plugin.releases?.[0]?.version ?? null
+              const local = isLocalSpec(spec)
+              updates[plugin.name] = { kind: local ? 'linked' : 'npm', version, current: version, latest, updateAvailable: version !== null && latest !== null && isUpgrade(version, latest), ...(local ? { restoreRequired: true } : {}) }
+            }
+            for (const name of SELF_NAMES) if (updates[name] !== undefined) updates[name] = { ...updates[name], updateAvailable: false }
+          }
           for (const [name, migration] of sourceMigrationFor) {
             const status = updates[name]
             if (status !== undefined) updates[name] = { ...status, sourceMigration: migration }
@@ -3866,7 +3902,7 @@ sendJson(response, 200, { updates })
         }
         try {
           await withMutationLock(response, 'install', async () => {
-            const body = (await readJsonBody(request)) as { name?: unknown; force?: unknown; restore?: unknown; compatVersion?: unknown }
+            const body = (await readJsonBody(request)) as { name?: unknown; force?: unknown; restore?: unknown; compatVersion?: unknown; releaseVersion?: unknown; bundled?: unknown }
             const name = typeof body.name === 'string' ? body.name : ''
             const force = body.force === true
             // A release the refusal dialog's own search confirmed compatible
@@ -3875,7 +3911,11 @@ sendJson(response, 200, { updates })
             const compatVersion = typeof body.compatVersion === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(body.compatVersion)
               ? body.compatVersion
               : null
-            const restore = body.restore === true
+            let restore = body.restore === true
+            if (config.catalogUrl !== undefined && SELF_NAMES.has(name)) {
+              sendJson(response, 400, { error: 'Arya Plugin Market is updated with the Arya application' })
+              return
+            }
             const manifestCapture = captureUpdateManifest()
             if (!manifestCapture.ok) {
               sendJson(response, 500, {
@@ -3888,7 +3928,43 @@ sendJson(response, 200, { updates })
               sendJson(response, 400, { error: 'plugin is not installed' })
               return
             }
-            if (restore && !isLocalSpec(spec)) {
+            let selectedRelease: string | null = null
+            let selectedReleaseVersion: string | null = null
+            if (config.catalogUrl !== undefined) {
+              const entry = (await loadRegistry()).plugins.find(plugin => plugin.name === name)
+              if (entry !== undefined) {
+                if (isLocalSpec(spec) && !restore && body.releaseVersion === undefined && body.bundled !== true) {
+                  sendJson(response, 400, { error: 'Choose a released version explicitly to replace this local plugin' })
+                  return
+                }
+                const samePublishedSource = entry.releases?.some(release => release.tarball === spec) === true
+                const repo = repoOfTarget(spec)?.split('#')[0]?.toLowerCase()
+                const sameRepository = repo !== undefined && entry.url.toLowerCase() === `https://github.com/${repo}`
+                if (!isLocalSpec(spec) && !samePublishedSource && !sameRepository && body.releaseVersion === undefined && body.bundled !== true && !restore) {
+                  sendJson(response, 400, { error: 'Choose a released version explicitly to switch this plugin source' })
+                  return
+                }
+                const selectedVersion = body.bundled === true ? bundledAryaVersion(config.dshInstallDir, name) : body.releaseVersion
+                try {
+                  selectedRelease = aryaReleaseTarget(entry, selectedVersion)
+                  selectedReleaseVersion = entry.releases!.find(release => release.tarball === selectedRelease)!.version
+                } catch (error) {
+                  sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
+                  return
+                }
+                const currentVersion = readInstalledVersion(config.profile, name, activeProfileDir)
+                if (body.releaseVersion === undefined && body.bundled !== true && !restore && currentVersion !== null
+                  && selectedReleaseVersion !== currentVersion && !isUpgrade(currentVersion, selectedReleaseVersion)) {
+                  sendJson(response, 400, { error: 'Choose an earlier version explicitly to downgrade this plugin' })
+                  return
+                }
+                restore = true
+              } else if (body.releaseVersion !== undefined || body.bundled === true) {
+                sendJson(response, 400, { error: 'Plugin is not in the Arya release catalog' })
+                return
+              }
+            }
+            if (restore && selectedRelease === null && !isLocalSpec(spec)) {
               sendJson(response, 400, { error: 'restore 只适用于 link:/file: 的本地开发安装。 / Restore only applies to locally developed link:/file: installs.' })
               return
             }
@@ -3896,7 +3972,8 @@ sendJson(response, 200, { updates })
               sendJson(response, 400, { error: '市场的本地开发链接不会被线上版本替换。 / The market\'s local development link is never replaced by an online release.' })
               return
             }
-            if (isLocalSpec(spec)) {
+            if (selectedRelease !== null) spec = selectedRelease
+            if (selectedRelease === null && isLocalSpec(spec)) {
               if (!restore) {
                 sendJson(response, 400, { error: 'locally linked plugins update from their checkout' })
                 return
@@ -4610,7 +4687,8 @@ sendJson(response, 200, { updates })
             // when a floating tag is what was sent). A version above the pin
             // is only possible on a floating target whose resolver moved
             // forward mid-download; that stays accepted.
-            if (ok && usesNpmUpdateTarget) {
+            if (ok && (usesNpmUpdateTarget || selectedRelease !== null)) {
+              if (selectedReleaseVersion !== null) expectedNpmVersion = selectedReleaseVersion
               const floatingDistTag = expectedNpmVersion === null
               if (
                 floatingDistTag
@@ -4623,7 +4701,7 @@ sendJson(response, 200, { updates })
               const direction = beforeVersion !== null && afterVersion !== null
                 ? compareVersions(afterVersion, beforeVersion)
                 : null
-              const unexpectedDowngrade = selfChannel === null && direction !== null && direction < 0
+              const unexpectedDowngrade = selectedRelease === null && selfChannel === null && direction !== null && direction < 0
               // Only a version BELOW the target is a mismatch. `latest` can move
               // forward while pnpm is still downloading — a large plugin gives
               // the author minutes of window — and rejecting the newer release
@@ -4633,7 +4711,9 @@ sendJson(response, 200, { updates })
               const targetOrder = target !== null && afterVersion !== null
                 ? compareVersions(afterVersion, target)
                 : null
-              const targetMismatch = target !== null && (
+              const targetMismatch = selectedRelease !== null
+                ? afterVersion !== selectedReleaseVersion || readInstalledPackageName(config.profile, name, activeProfileDir) !== name
+                : target !== null && (
                 afterVersion === null
                 || (targetOrder !== null
                   // Comparable: getting LESS than we asked for is the symptom.
@@ -5414,7 +5494,7 @@ sendJson(response, 200, { updates })
               packages.push(name, ...printedKeysFor(name))
               continue
             }
-            const target = entry === undefined ? null : installTargetFor(entry)
+            const target = entry === undefined ? null : entry.arya === true ? aryaReleaseTarget(entry) : installTargetFor(entry)
             const keys = target === null ? [] : await buildKeys(name, target)
             // A package pnpm refused to prepare in this process (#698) — a
             // transitive git dependency, typically, which no anchor above
@@ -5798,7 +5878,7 @@ sendJson(response, 200, { updates })
               sendJson(response, 400, { error: 'plugin is not in the curated registry' })
               return
             }
-            const plainTarget = installTargetFor(entry)
+            const plainTarget = entry.arya === true ? aryaReleaseTarget(entry, body.version) : installTargetFor(entry)
             if (plainTarget === null) {
               sendJson(response, 400, { error: 'unsupported source url' })
               return

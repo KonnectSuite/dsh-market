@@ -40,6 +40,7 @@ import {
 import { HostCheckbox, HostSwitch, HostTag } from './optional-primitives.ts'
 import css from './Market.module.css'
 import { MARK_BLOCK_RADIUS, MARK_BLOCK_SIZE, MARK_GRID_BLOCKS, MARK_PLUG_BLOCK, MARK_VIEW_BOX } from './market-mark.ts'
+import { AryaVersions } from './AryaVersions.tsx'
 import { CommentsModal } from './CommentsModal.tsx'
 import { SearchInput } from './SearchInput.tsx'
 import { downloadStatsText } from './download-stats.ts'
@@ -1957,6 +1958,7 @@ export function MarketSection(props: MarketSectionProps) {
   /** Ignores out-of-order /dsh-market/block responses after a newer toggle. */
   const blockOpGen = useRef(0)
   const [pluginMenuUrl, setPluginMenuUrl] = useState<string | null>(null)
+  const [aryaVersionName, setAryaVersionName] = useState<string | null>(null)
   const [installedMenuName, setInstalledMenuName] = useState<string | null>(null)
   const [clearingStale, setClearingStale] = useState(false)
   /** The notes payload the server answers with, verbatim (see /changelog). */
@@ -3348,7 +3350,7 @@ export function MarketSection(props: MarketSectionProps) {
       .catch(() => {})
   }, [])
 
-  const doUpdate = useCallback((name: string, force = false, restore = false, compatVersion?: string) => {
+  const doUpdate = useCallback((name: string, force = false, restore = false, compatVersion?: string, releaseVersion?: string, bundled = false) => {
     setInstallError(null)
     setActivationWarnings([])
     // Only THIS row's stale marker is cleared. "Update all" walks the list
@@ -3375,7 +3377,7 @@ export function MarketSection(props: MarketSectionProps) {
     return fetch(api('/dsh-market/update'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, ...(force ? { force: true } : {}), ...(restore ? { restore: true } : {}), ...(compatVersion !== undefined ? { compatVersion } : {}) }),
+      body: JSON.stringify({ name, ...(force ? { force: true } : {}), ...(restore ? { restore: true } : {}), ...(compatVersion !== undefined ? { compatVersion } : {}), ...(releaseVersion === undefined ? {} : { releaseVersion }), ...(bundled ? { bundled: true } : {}) }),
     })
       .then(res => res.json().then(body => ({ status: res.status, body })))
       .then(({ status, body }) => {
@@ -3421,6 +3423,11 @@ export function MarketSection(props: MarketSectionProps) {
           refreshInstalled()
         } else {
           if (status === 409) {
+            if (releaseVersion !== undefined || bundled) {
+              setRecords(list => patchRecord(list, updateRecordId, { state: 'failed', reason: t('aryaVersionBusy') }))
+              setInstallError(t('aryaVersionBusy'))
+              return
+            }
             if (body.agentsBusy === true) {
               // Same queue treatment as installs: the host refused before
               // touching pnpm, so this becomes a `queued` record the drain
@@ -4790,6 +4797,7 @@ export function MarketSection(props: MarketSectionProps) {
         onClose={() => setInstalledMenuName(null)}
         onSelect={(id) => {
           setInstalledMenuName(null)
+          if (id === 'arya-versions' && !uninstallBusy) setAryaVersionName(name)
           if (id === 'restore-online' && data !== null && !uninstallBusy) askRestore(name)
           if (id === 'favorite' && favoriteUrl !== undefined) toggleFavorite(favoriteUrl)
           if (id === 'block') toggleBlock(blockToggleName(aliases))
@@ -4808,7 +4816,8 @@ export function MarketSection(props: MarketSectionProps) {
           >···</Button>
         )}
         items={[
-          ...(showRestore ? [{ id: 'restore-online', label: t('restoreOnline'), disabled: data === null || uninstallBusy }] : []),
+          ...(entry?.arya === true ? [{ id: 'arya-versions', label: t('aryaVersions'), disabled: uninstallBusy }] : []),
+          ...(showRestore && entry?.arya !== true ? [{ id: 'restore-online', label: t('restoreOnline'), disabled: data === null || uninstallBusy }] : []),
           // Before block: the same kind of choice about one plugin, and the
           // harmless one of the two. Having it installed is exactly when a user
           // knows whether it is worth keeping — the complaint in #785 was
@@ -5562,7 +5571,7 @@ export function MarketSection(props: MarketSectionProps) {
         </div>
         <div className={css.sub}>
           <span>{t('subtitle')}</span>
-          <a className={css.submitLink} href="https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md" target="_blank" rel="noreferrer">{t('submitPlugin')}</a>
+          <a className={css.submitLink} href="https://github.com/KonnectSuite/dsh-market" target="_blank" rel="noreferrer">{t('submitPlugin')}</a>
           <span className={css.grow} />
           <Button
             variant="outline"
@@ -6938,6 +6947,7 @@ export function MarketSection(props: MarketSectionProps) {
           </span>
         </Tooltip>
       )}
+      {aryaVersionName !== null && <AryaVersions name={aryaVersionName} local={isLocalDev(String(installed[aryaVersionName] ?? ''), updates[aryaVersionName])} t={t} onClose={() => setAryaVersionName(null)} onSelect={(version, bundled) => { const name = aryaVersionName; setAryaVersionName(null); void doUpdate(name, false, true, undefined, version, bundled) }} />}
       {renamingGroup !== null && (
         <Modal
           open

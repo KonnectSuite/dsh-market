@@ -34,6 +34,8 @@ export function api(path: string): string {
 }
 
 export interface RegistryPlugin {
+  arya?: boolean
+  releases?: { version: string; tarball: string }[]
   name: string
   owner: string
   url: string
@@ -794,6 +796,7 @@ function repoRoots(ids: ReadonlySet<string>): Set<string> {
   return new Set([...ids].map(id => id.split('#path:/')[0]!))
 }
 function sameSourceConflict(plugin: RegistryPlugin, spec: string, repoIdentities: readonly string[] = []): boolean {
+  if (plugin.arya === true && plugin.releases?.some(release => release.tarball === spec)) return false
   const entry = repoRoots(entryRepoIds(plugin))
   const dep = repoRoots(depRepoIds(spec, repoIdentities))
   if (entry.size === 0 || dep.size === 0) return false
@@ -866,6 +869,7 @@ export function matchInstalledName(
   const ids = entryIdentities(plugin)
   for (const [name, spec] of Object.entries(installed)) {
     const specStr = String(spec)
+    if (plugin.arya === true && plugin.name === name && plugin.releases?.some(release => release.tarball === specStr)) return name
     const repos = repoIdentities[name] ?? []
     // Discover badges and theme cards share this helper. Local link:/file:
     // installs must use the same strict catalog row as restore and the
@@ -1530,6 +1534,8 @@ export function catalogEntryForInstalled(
   repoIdentities: readonly string[] = [],
   repoHints: readonly string[] = [],
 ): RegistryPlugin | undefined {
+  const arya = plugins.find(plugin => plugin.arya === true && plugin.name === name && (/^(?:link|file):/i.test(spec) || plugin.releases?.some(release => release.tarball === spec)))
+  if (arya !== undefined) return arya
   if (/^(?:link|file):/i.test(spec)) {
     return findCatalogEntryForLocal(plugins, name, repoIdentities, repoHints) ?? undefined
   }

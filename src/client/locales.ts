@@ -1,7 +1,7 @@
 /** zh/en dictionaries for the Market settings section and install toast. */
 
 export const zh = {
-  nav: '插件市场',
+  nav: 'Arya 插件市场',
   setCardDesc: '查看插件市场版本与设置。',
   setSelfUpToDate: '已是最新版本',
   setSelfUpdateReady: '有新版本',
@@ -50,7 +50,7 @@ export const zh = {
   setSelfRemovedHint: '重启 DeepSeek Harness 后完全清理。',
   setSelfFailed: '操作失败',
   versionHint: '插件市场版本 — 反馈问题时请附上',
-  subtitle: '发现社区为 DeepSeek Harness 开发的插件',
+  subtitle: '安装 Arya 插件，选择发布版本并恢复旧版本',
   submitPlugin: '申请收录插件 ↗',
   descExpand: '展开',
   descCollapse: '收起',
@@ -111,7 +111,12 @@ export const zh = {
   blockedFilteredEmpty: '匹配的插件在「已屏蔽」标签里。',
   blockedEmpty: '还没有屏蔽任何插件。',
   blockFailed: '无法更新屏蔽列表，请重试。',
-  tabDiscover: '发现',
+  tabDiscover: 'Arya 插件',
+  aryaVersions: '选择版本',
+  aryaVersionsFailed: '无法加载插件版本，请重试',
+  aryaVersionBusy: '请等待当前任务完成，再选择插件版本',
+  aryaBundled: '恢复随应用提供的版本',
+  aryaLocalSwitch: '选择版本将替换本地开发插件',
   tabFavorites: '收藏',
   tabInstalled: '已安装',
   tabBlocked: '已屏蔽',
@@ -718,7 +723,7 @@ export const zh = {
 export type MarketKey = keyof typeof zh
 
 export const en: Record<MarketKey, string> = {
-  nav: 'Plugin Market',
+  nav: 'Arya Plugin Market',
   setCardDesc: 'View the plugin market version and settings.',
   setSelfUpToDate: 'Up to date',
   setSelfUpdateReady: 'New version available:',
@@ -767,7 +772,7 @@ export const en: Record<MarketKey, string> = {
   setSelfRemovedHint: 'Restart DeepSeek Harness to finish cleaning up.',
   setSelfFailed: 'The operation failed',
   versionHint: 'Plugin market version — include it when reporting an issue',
-  subtitle: 'Discover community plugins for DeepSeek Harness',
+  subtitle: 'Install Arya plugins, choose releases, and restore earlier versions',
   submitPlugin: 'Submit a plugin ↗',
   descExpand: 'Show more',
   descCollapse: 'Show less',
@@ -827,7 +832,12 @@ export const en: Record<MarketKey, string> = {
   blockedFilteredEmpty: 'Matching plugins are on the Hidden tab.',
   blockedEmpty: 'No hidden plugins yet.',
   blockFailed: 'Could not update the hidden list. Try again.',
-  tabDiscover: 'Discover',
+  tabDiscover: 'Arya plugins',
+  aryaVersions: 'Choose version',
+  aryaVersionsFailed: 'Could not load plugin versions. Try again.',
+  aryaVersionBusy: 'Wait for the current task to finish, then choose the plugin version again',
+  aryaBundled: 'Restore bundled version',
+  aryaLocalSwitch: 'Choosing a release replaces this local development plugin',
   tabFavorites: 'Favorites',
   tabInstalled: 'Installed',
   tabBlocked: 'Hidden',

@@ -1,3 +1,7 @@
+# Arya Plugin Market
+
+This KonnectSuite fork provides Arya plugin releases, updates, version selection, and restoration of installer-bundled versions. See [the Arya publishing guide](ARYA.md) for catalog maintenance and public package releases. The upstream market implementation and license are retained below.
+
 <p align="center">
   <img src="assets/logo.svg" width="96" alt="dsh-market logo">
 </p>

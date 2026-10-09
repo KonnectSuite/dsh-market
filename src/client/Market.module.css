@@ -1042,3 +1042,9 @@
 .migrationLabel{font-size:11px;color:var(--dsw-alias-label-secondary,#9ca3af)}
 .migrationArrow{text-align:center;color:var(--dsw-alias-label-secondary,#9ca3af)}
 .migrationWarning{display:flex;align-items:flex-start;gap:6px;margin:12px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary,#b45309)}
+
+.aryaVersionList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

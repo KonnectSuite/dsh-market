@@ -14,3 +14,5 @@ client/*.map
 # build fetches its own into a throwaway checkout, and the market reads the
 # live catalog.
 data/registry-snapshot.json
+
+.arya-release-artifacts/

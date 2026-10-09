@@ -4,11 +4,15 @@
  * behind it any more.
  */
 
+import type { AryaRelease } from './arya.ts'
 import { configuredProxy, marketFetch } from './net.ts'
 import { catalogFromPackage } from './catalog-npm.ts'
 import { activeRegion, routesFor, type CatalogSource, type Region } from './regions.ts'
 
 export interface RegistryPlugin {
+  /** Arya releases are ordered newest first by the publisher. */
+  arya?: boolean
+  releases?: AryaRelease[]
   name: string
   owner: string
   url: string
@@ -226,7 +230,7 @@ export function forgetCatalog(): void {
  * would rebuild exactly the fallback this replaced.
  * @throws when the catalog cannot be fetched or does not look like one.
  */
-export async function loadRegistry(region: Region = activeRegion()): Promise<Registry> {
+export async function loadRegistry(region: Region = activeRegion(), catalogUrl?: string): Promise<Registry> {
   const started = Date.now()
   let last: unknown
   let attempts = 0
@@ -245,7 +249,7 @@ export async function loadRegistry(region: Region = activeRegion()): Promise<Reg
   // the FIRST request the market makes, so a mirror that has gone down must
   // mean a slow market rather than an empty one — the list ends at the
   // address that has always worked.
-  for (const source of routesFor(region).catalog) {
+  for (const source of catalogUrl === undefined ? routesFor(region).catalog : [{ kind: 'url' as const, url: catalogUrl }]) {
     const key = sourceKey(source)
     // Two attempts each. A catalog fetch crossing a long, lossy path fails
     // transiently often enough that one retry is worth more than the second
