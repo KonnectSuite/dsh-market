@@ -7083,3 +7083,18 @@ describe('catalog version in discover byline (#348)', () => {
     expect(tip.textContent).not.toMatch(/\(\)/)
   })
 })
+
+it('installs a chosen Arya release from a catalog card before a profile override exists', async () => {
+  const plugin = { ...REGISTRY.plugins[0], arya: true, releases: [{ version: '0.1.0', sha256: '0'.repeat(64), tarball: 'https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-loop-v0.1.0/dsh-loop-0.1.0.tgz' }] }
+  stubFetch({
+    '/dsh-market/registry': { source: 'live', registry: { ...REGISTRY, plugins: [plugin] } },
+    '/dsh-market/arya-versions': { name: plugin.name, releases: [{ version: '0.1.0' }], bundled: '0.1.0' },
+    '/dsh-market/install': { ok: true, hot: false, installed: {} },
+  })
+  render(<MarketSection {...props()} />)
+  await openRowMenu(plugin.name)
+  fireEvent.click(await screen.findByRole('menuitem', { name: en.aryaVersions }))
+  fireEvent.click(await screen.findByRole('button', { name: '0.1.0' }))
+  await waitFor(() => expect(fetchCalls).toContainEqual({ path: '/dsh-market/install', method: 'POST', body: { url: plugin.url, version: '0.1.0' } }))
+  expect(fetchCalls.some(call => call.path === '/dsh-market/update')).toBe(false)
+})

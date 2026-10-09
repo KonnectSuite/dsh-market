@@ -6,9 +6,9 @@ Arya 插件市场复用 dsh-market 的配置管理、安装、兼容性检查与
 
 ## Using releases
 
-The Arya plugins tab lists published packages. On Installed, open a plugin's menu and choose **Choose version** to install a listed release, including an earlier version. **Restore bundled version** chooses the version in the running application's installation, when that version is available in the catalog. Local development installations require an explicit release selection or source switch. Plugin settings and the profile's enable choices remain owned by the existing management services. A restart can be required when host code is already loaded.
+The Arya plugins tab lists published packages. Open a plugin's menu on Arya plugins or Installed and choose **Choose version** to install a listed release, including an earlier version. **Restore bundled version** chooses the version in the running application's installation, when that version is available in the catalog. Local development installations require an explicit release selection or source switch. Plugin settings and the profile's enable choices remain owned by the existing management services. A restart can be required when host code is already loaded.
 
-Arya 插件标签页列出已发布的插件包。在已安装标签页中打开插件菜单，选择**选择版本**即可安装目录中的版本，包括旧版本。目录中包含当前应用安装包所带版本时，**恢复随应用提供的版本**会选择该版本。本地开发安装必须明确选择发布版本或切换来源。插件设置和启用状态继续由现有管理服务管理。已加载的服务端代码可能需要重启才能生效。
+Arya 插件标签页列出已发布的插件包。在 Arya 插件或已安装标签页中打开插件菜单，选择**选择版本**即可安装目录中的版本，包括旧版本。目录中包含当前应用安装包所带版本时，**恢复随应用提供的版本**会选择该版本。本地开发安装必须明确选择发布版本或切换来源。插件设置和启用状态继续由现有管理服务管理。已加载的服务端代码可能需要重启才能生效。
 
 The market itself is pinned by Arya and updated with the application. It cannot replace itself with the upstream npm package. Community packages already in a profile remain managed by the existing update and removal services; the Arya catalog does not claim ownership of those packages.
 

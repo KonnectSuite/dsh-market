@@ -34,7 +34,7 @@ export function AryaVersions(props: {
     {error !== null ? <div role="alert"><p>{error}</p><Button onClick={() => setAttempt(value => value + 1)}>{props.t('commentsRetry')}</Button></div>
       : versions === null ? <div className={css.commentsStatus} role="status"><IconLoadingOutline16 /></div>
       : <div className={css.aryaVersionList}>
-        {versions.bundled !== null && <Button variant="outline" onClick={() => props.onSelect(undefined, true)}>{props.t('aryaBundled')} · {versions.bundled}</Button>}
+        {versions.bundled !== null && <Button variant="outline" onClick={() => { if (versions.bundled !== null) props.onSelect(versions.bundled, true) }}>{props.t('aryaBundled')} · {versions.bundled}</Button>}
         {versions.releases.map(release => <Button key={release.version} variant="outline" onClick={() => props.onSelect(release.version, false)}>{release.version}</Button>)}
       </div>}
   </Modal>

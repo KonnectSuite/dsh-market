@@ -3503,7 +3503,9 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					className: Market_module_css_default.aryaVersionList,
 					children: [versions.bundled !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Button, {
 						variant: "outline",
-						onClick: () => props.onSelect(void 0, true),
+						onClick: () => {
+							if (versions.bundled !== null) props.onSelect(versions.bundled, true);
+						},
 						children: [
 							props.t("aryaBundled"),
 							" · ",
@@ -9240,6 +9242,14 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 						refreshInstalled();
 					} else {
 						if (status === 409) {
+							if (version !== void 0) {
+								setRecords((list) => patch(list, recordId, {
+									state: "failed",
+									reason: t("aryaVersionBusy")
+								}));
+								setOperationsOpen(true);
+								return;
+							}
 							if (body.agentsBusy === true) {
 								setRecords((list) => patch(list, recordId, {
 									state: "queued",
@@ -10823,6 +10833,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 					onSelect: (id) => {
 						setPluginMenuUrl(null);
 						if (id === "block") toggleBlock(blockToggleName(aliases));
+						if (id === "arya-versions") setAryaVersionName(plugin.name);
 					},
 					align: "end",
 					portal: true,
@@ -10834,7 +10845,11 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 						onClick: () => setPluginMenuUrl((open) => open === plugin.url ? null : plugin.url),
 						children: "···"
 					}),
-					items: [{
+					items: [...plugin.arya === true ? [{
+						id: "arya-versions",
+						label: t("aryaVersions"),
+						disabled: busyUrl !== null || updatingName !== null || removingName !== null
+					}] : [], {
 						id: "block",
 						label: hidden ? t("blockRemove") : t("blockAdd")
 					}]
@@ -11709,7 +11724,7 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 									}),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
 										className: Market_module_css_default.repoLink,
-										href: "https://github.com/dsh-market/dsh-market",
+										href: "https://github.com/KonnectSuite/dsh-market",
 										target: "_blank",
 										rel: "noreferrer",
 										title: "dsh-market · GitHub",
@@ -13468,7 +13483,9 @@ window.__ModuleLoader__.load({ id: "dshmarket", factory: (require) => {
 						onSelect: (version, bundled) => {
 							const name = aryaVersionName;
 							setAryaVersionName(null);
-							doUpdate(name, false, true, void 0, version, bundled);
+							const plugin = data?.plugins.find((plugin) => plugin.name === name);
+							if (installed[name] === void 0 && plugin !== void 0) doInstall(plugin, false, version);
+							else doUpdate(name, false, true, void 0, version, bundled);
 						}
 					}),
 					renamingGroup !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {

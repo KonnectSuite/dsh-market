@@ -14,7 +14,7 @@ it('chooses an earlier published release and exposes an explicit local-source sw
   fireEvent.click(await screen.findByRole('button', { name: '0.1.0' }))
   expect(select).toHaveBeenCalledWith('0.1.0', false)
   fireEvent.click(screen.getByRole('button', { name: `${en.aryaBundled} · 0.1.0` }))
-  expect(select).toHaveBeenCalledWith(undefined, true)
+  expect(select).toHaveBeenCalledWith('0.1.0', true)
 })
 it('keeps a failed release lookup retryable', async () => {
   const fetcher = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(new Response(JSON.stringify({ releases: [{ version: '0.2.0' }], bundled: null })))

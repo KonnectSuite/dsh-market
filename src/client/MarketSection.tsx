@@ -3054,6 +3054,11 @@ export function MarketSection(props: MarketSectionProps) {
           refreshInstalled()
         } else {
           if (status === 409) {
+            if (version !== undefined) {
+              setRecords(list => patchRecord(list, recordId, { state: 'failed', reason: t('aryaVersionBusy') }))
+              setOperationsOpen(true)
+              return
+            }
             if (body.agentsBusy === true) {
               // Agents-busy is a queue, not a failure: keep the record as
               // `queued` so the drain below runs it when agents go idle.
@@ -4750,6 +4755,7 @@ export function MarketSection(props: MarketSectionProps) {
         onSelect={(id) => {
           setPluginMenuUrl(null)
           if (id === 'block') toggleBlock(blockToggleName(aliases))
+          if (id === 'arya-versions') setAryaVersionName(plugin.name)
         }}
         align="end"
         portal
@@ -4762,7 +4768,10 @@ export function MarketSection(props: MarketSectionProps) {
             onClick={() => setPluginMenuUrl(open => open === plugin.url ? null : plugin.url)}
           >···</button>
         )}
-        items={[{ id: 'block', label: hidden ? t('blockRemove') : t('blockAdd') }]}
+        items={[
+          ...(plugin.arya === true ? [{ id: 'arya-versions', label: t('aryaVersions'), disabled: busyUrl !== null || updatingName !== null || removingName !== null }] : []),
+          { id: 'block', label: hidden ? t('blockRemove') : t('blockAdd') },
+        ]}
       />
     )
   }
@@ -5534,7 +5543,7 @@ export function MarketSection(props: MarketSectionProps) {
           {/* A quiet pointer back to the project — most visitors reach the
               market through a client that embeds it, with no other way to
               find the repo it came from. */}
-          <a className={css.repoLink} href="https://github.com/dsh-market/dsh-market" target="_blank" rel="noreferrer" title="dsh-market · GitHub">dsh-market</a>
+          <a className={css.repoLink} href="https://github.com/KonnectSuite/dsh-market" target="_blank" rel="noreferrer" title="dsh-market · GitHub">dsh-market</a>
           {version !== null && <span className={css.version} title={t('versionHint')}>v{version}</span>}
           {(() => {
             const self = installed['dshmarket'] !== undefined ? 'dshmarket' : 'dsh-market'
@@ -6948,7 +6957,13 @@ export function MarketSection(props: MarketSectionProps) {
           </span>
         </Tooltip>
       )}
-      {aryaVersionName !== null && <AryaVersions name={aryaVersionName} local={isLocalDev(String(installed[aryaVersionName] ?? ''), updates[aryaVersionName])} t={t} onClose={() => setAryaVersionName(null)} onSelect={(version, bundled) => { const name = aryaVersionName; setAryaVersionName(null); void doUpdate(name, false, true, undefined, version, bundled) }} />}
+      {aryaVersionName !== null && <AryaVersions name={aryaVersionName} local={isLocalDev(String(installed[aryaVersionName] ?? ''), updates[aryaVersionName])} t={t} onClose={() => setAryaVersionName(null)} onSelect={(version, bundled) => {
+        const name = aryaVersionName
+        setAryaVersionName(null)
+        const plugin = data?.plugins.find(plugin => plugin.name === name)
+        if (installed[name] === undefined && plugin !== undefined) doInstall(plugin, false, version)
+        else void doUpdate(name, false, true, undefined, version, bundled)
+      }} />}
       {renamingGroup !== null && (
         <Modal
           open
