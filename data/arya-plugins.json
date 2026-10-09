@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-09T04:56:09.541Z",
+  "updated": "2026-10-09T12:01:14.807Z",
   "count": 6,
   "categories": {
     "arya": {
@@ -22,6 +22,11 @@
       "arya": true,
       "releases": [
         {
+          "version": "0.2.3",
+          "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.3/dsh-native-window-0.2.3.tgz",
+          "sha256": "6279535736eb6cfcd4b2b5d4d289db0189208019cacf71af1e5d4ff308595d86"
+        },
+        {
           "version": "0.2.2",
           "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.2/dsh-native-window-0.2.2.tgz",
           "sha256": "f3488d58821204644ed40c35da57cf37223b1f8ce908547da5a95a2d8409b596"
@@ -32,8 +37,8 @@
           "sha256": "4b72c5994c689eee949b71dd8b53464605457e953ffcaca9bb4e131cfb1db47e"
         }
       ],
-      "version": "0.2.2",
-      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.2/dsh-native-window-0.2.2.tgz"
+      "version": "0.2.3",
+      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-native-window-v0.2.3/dsh-native-window-0.2.3.tgz"
     },
     {
       "name": "dsh-local-llm",
