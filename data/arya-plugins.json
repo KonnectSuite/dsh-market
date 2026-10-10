@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-10T03:39:55.024Z",
+  "updated": "2026-10-10T03:49:19.313Z",
   "count": 8,
   "categories": {
     "arya": {
@@ -209,13 +209,18 @@
       "arya": true,
       "releases": [
         {
+          "version": "0.2.1",
+          "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-tool-l5x-v0.2.1/dsh-tool-l5x-0.2.1.tgz",
+          "sha256": "b6318d0203cc0db66ec85d96dc9e7162333749403f3249ba8d56656499f8d6e6"
+        },
+        {
           "version": "0.2.0",
           "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-tool-l5x-v0.2.0/dsh-tool-l5x-0.2.0.tgz",
           "sha256": "a8f68870232e894307307f092b56c1ea85033e191ccadf808ccaf05d2d3fdf27"
         }
       ],
-      "version": "0.2.0",
-      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-tool-l5x-v0.2.0/dsh-tool-l5x-0.2.0.tgz"
+      "version": "0.2.1",
+      "tarball": "https://github.com/KonnectSuite/dsh-market/releases/download/plugin-dsh-tool-l5x-v0.2.1/dsh-tool-l5x-0.2.1.tgz"
     }
   ]
 }
